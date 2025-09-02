@@ -274,14 +274,12 @@ class DocumentsPage extends StatefulWidget {
 }
 
 class _DocumentsPageState extends State<DocumentsPage> {
-  final _search = TextEditingController();
-  final List<_Doc> _all = const [
+  final List<_Doc> _documents = const [
     _Doc(
       title: 'Лицензия на перевозку №123',
       type: 'Лицензия',
       version: 3,
       expiresAt: '31.12.2025',
-      status: 'Действует',
       icon: Icons.verified_user,
       color: Color(0xFF4CAF50),
     ),
@@ -290,7 +288,6 @@ class _DocumentsPageState extends State<DocumentsPage> {
       type: 'Разрешение',
       version: 2,
       expiresAt: '15.03.2026',
-      status: 'Действует',
       icon: Icons.route,
       color: Color(0xFF2196F3),
     ),
@@ -299,7 +296,6 @@ class _DocumentsPageState extends State<DocumentsPage> {
       type: 'Полис',
       version: 1,
       expiresAt: '01.05.2025',
-      status: 'Истекает',
       icon: Icons.security,
       color: Color(0xFFFF9800),
     ),
@@ -308,39 +304,10 @@ class _DocumentsPageState extends State<DocumentsPage> {
       type: 'Сертификат',
       version: 1,
       expiresAt: '20.02.2025',
-      status: 'Истекает',
       icon: Icons.build_circle,
       color: Color(0xFFFF5722),
     ),
   ];
-  List<_Doc> _filtered = [];
-  String _selectedFilter = 'Все';
-
-  @override
-  void initState() {
-    super.initState();
-    _filtered = _all;
-    _search.addListener(_applyFilter);
-  }
-
-  @override
-  void dispose() {
-    _search.dispose();
-    super.dispose();
-  }
-
-  void _applyFilter() {
-    final q = _search.text.toLowerCase();
-    setState(() {
-      _filtered = _all.where((d) {
-        final matchesSearch = d.title.toLowerCase().contains(q) ||
-                             d.type.toLowerCase().contains(q);
-        final matchesFilter = _selectedFilter == 'Все' ||
-                             d.status == _selectedFilter;
-        return matchesSearch && matchesFilter;
-      }).toList();
-    });
-  }
 
   Future<void> _refresh() async {
     await Future.delayed(const Duration(milliseconds: 800));
@@ -408,7 +375,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Всего документов: ${_all.length}',
+                          'Всего документов: ${_documents.length}',
                           style: TextStyle(
                             color: Colors.white.withOpacity(0.8),
                             fontSize: 16,
@@ -427,87 +394,9 @@ class _DocumentsPageState extends State<DocumentsPage> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              // Поиск
-              Container(
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
-                      blurRadius: 10,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: TextField(
-                  controller: _search,
-                  decoration: const InputDecoration(
-                    hintText: 'Поиск документов...',
-                    prefixIcon: Icon(Icons.search),
-                    border: InputBorder.none,
-                    fillColor: Colors.transparent,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              // Фильтры
-              SizedBox(
-                height: 40,
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  children: ['Все', 'Действует', 'Истекает'].map((filter) {
-                    final isSelected = _selectedFilter == filter;
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: FilterChip(
-                        label: Text(filter),
-                        selected: isSelected,
-                        onSelected: (selected) {
-                          setState(() {
-                            _selectedFilter = filter;
-                            _applyFilter();
-                          });
-                        },
-                        backgroundColor: Colors.white,
-                        selectedColor: const Color(0xFF0066CC).withOpacity(0.1),
-                        side: BorderSide(
-                          color: isSelected 
-                            ? const Color(0xFF0066CC) 
-                            : Colors.grey[300]!,
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              // Статистика
-              Row(
-                children: [
-                  Expanded(child: _StatCard(
-                    title: 'Действующие',
-                    count: _all.where((d) => d.status == 'Действует').length,
-                    color: const Color(0xFF4CAF50),
-                    icon: Icons.check_circle,
-                  )),
-                  const SizedBox(width: 12),
-                  Expanded(child: _StatCard(
-                    title: 'Истекающие',
-                    count: _all.where((d) => d.status == 'Истекает').length,
-                    color: const Color(0xFFFF9800),
-                    icon: Icons.warning,
-                  )),
-                ],
-              ),
-              const SizedBox(height: 20),
-
               // Документы
-              ..._filtered.map((d) => _DocumentCard(doc: d)).toList(),
-              if (_filtered.isEmpty)
+              ..._documents.map((d) => _DocumentCard(doc: d)).toList(),
+              if (_documents.isEmpty)
                 Container(
                   padding: const EdgeInsets.all(40),
                   child: Column(
@@ -522,13 +411,6 @@ class _DocumentsPageState extends State<DocumentsPage> {
                         'Документы не найдены',
                         style: Theme.of(context).textTheme.titleMedium?.copyWith(
                           color: Colors.grey[600],
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Попробуйте изменить условия поиска',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Colors.grey[500],
                         ),
                       ),
                     ],
@@ -585,72 +467,6 @@ class _DocumentsPageState extends State<DocumentsPage> {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _StatCard extends StatelessWidget {
-  const _StatCard({
-    required this.title,
-    required this.count,
-    required this.color,
-    required this.icon,
-  });
-
-  final String title;
-  final int count;
-  final Color color;
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, color: color, size: 20),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '$count',
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[600],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -731,26 +547,6 @@ class _DocumentCard extends StatelessWidget {
                             color: Colors.grey[600],
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: doc.status == 'Действует' 
-                              ? const Color(0xFF4CAF50).withOpacity(0.1)
-                              : const Color(0xFFFF9800).withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            doc.status,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
-                              color: doc.status == 'Действует' 
-                                ? const Color(0xFF4CAF50)
-                                : const Color(0xFFFF9800),
-                            ),
-                          ),
-                        ),
                       ],
                     ),
                   ],
@@ -796,7 +592,6 @@ class _Doc {
   final String type;
   final int version;
   final String expiresAt;
-  final String status;
   final IconData icon;
   final Color color;
 
@@ -805,7 +600,6 @@ class _Doc {
     required this.type,
     required this.version,
     required this.expiresAt,
-    required this.status,
     required this.icon,
     required this.color,
   });
