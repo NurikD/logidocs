@@ -1,9 +1,73 @@
 import 'package:flutter/material.dart';
+import 'package:dio/dio.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-void main() {
+/// === НАСТРОЙКИ API ===
+/// Если backend (Django) на этом же ПК:
+const String kBaseUrl = 'http://127.0.0.1:8000';
+
+/// Если Android-эмулятор: const kBaseUrl = 'http://10.0.2.2:8000';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Api.I.init();
   runApp(const LogiDocsApp());
 }
 
+/// ================== API-КЛИЕНТ ==================
+class Api {
+  Api._();
+  static final Api I = Api._();
+
+  final Dio _dio = Dio(BaseOptions(baseUrl: kBaseUrl));
+  final _storage = const FlutterSecureStorage();
+
+  Future<void> init() async {
+    final access = await _storage.read(key: 'access');
+    if (access != null) {
+      _dio.options.headers['Authorization'] = 'Bearer $access';
+    }
+  }
+
+  Future<Map<String, dynamic>> login(String username, String password) async {
+    final res = await _dio.post(
+      '/api/auth/token/',
+      data: {'username': username, 'password': password},
+    );
+    final data = Map<String, dynamic>.from(res.data);
+    await _storage.write(key: 'access', value: data['access']);
+    await _storage.write(key: 'refresh', value: data['refresh']);
+    _dio.options.headers['Authorization'] = 'Bearer ${data['access']}';
+    return data; // содержит must_change_pw
+  }
+
+  Future<void> changePassword(String oldPw, String newPw) async {
+    await _dio.post(
+      '/api/auth/change-password/',
+      data: {'old_password': oldPw, 'new_password': newPw},
+    );
+  }
+
+  Future<List<Doc>> getDocuments() async {
+    final access = await _storage.read(key: 'access');
+    if (access != null) {
+      _dio.options.headers['Authorization'] = 'Bearer $access';
+    }
+    final res = await _dio.get('/api/documents/');
+    final list = (res.data as List)
+        .cast<Map>()
+        .map((m) => Doc.fromJson(Map<String, dynamic>.from(m)))
+        .toList();
+    return list;
+  }
+
+  Future<void> logout() async {
+    await _storage.deleteAll();
+    _dio.options.headers.remove('Authorization');
+  }
+}
+
+/// ================== ПРИЛОЖЕНИЕ ==================
 class LogiDocsApp extends StatelessWidget {
   const LogiDocsApp({super.key});
 
@@ -17,9 +81,7 @@ class LogiDocsApp extends StatelessWidget {
         brightness: Brightness.light,
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF0066CC),
-          primary: const Color(0xFF0066CC),
-          secondary: const Color(0xFF4CAF50),
-        ),
+        ).copyWith(secondary: const Color(0xFF4CAF50)),
         scaffoldBackgroundColor: const Color(0xFFF8F9FA),
         appBarTheme: const AppBarTheme(
           backgroundColor: Colors.white,
@@ -35,11 +97,11 @@ class LogiDocsApp extends StatelessWidget {
         inputDecorationTheme: InputDecorationTheme(
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: Colors.grey[300]!),
+            borderSide: const BorderSide(color: Color(0xFFDDDDDD)),
           ),
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: Colors.grey[300]!),
+            borderSide: const BorderSide(color: Color(0xFFDDDDDD)),
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
@@ -47,21 +109,31 @@ class LogiDocsApp extends StatelessWidget {
           ),
           filled: true,
           fillColor: Colors.white,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 16,
+          ),
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
             backgroundColor: const Color(0xFF0066CC),
             foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
             minimumSize: const Size.fromHeight(56),
             elevation: 0,
-            textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            textStyle: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
-        cardTheme: CardThemeData(
+        cardTheme: const CardThemeData(
           elevation: 0,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(16))),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(16)),
+          ),
           color: Colors.white,
           surfaceTintColor: Colors.transparent,
         ),
@@ -71,10 +143,9 @@ class LogiDocsApp extends StatelessWidget {
   }
 }
 
-/// -------------------- LOGIN --------------------
+/// ================== LOGIN ==================
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
-
   @override
   State<LoginPage> createState() => _LoginPageState();
 }
@@ -83,6 +154,7 @@ class _LoginPageState extends State<LoginPage> {
   final _login = TextEditingController();
   final _pass = TextEditingController();
   bool _isObscured = true;
+  bool _loading = false;
 
   @override
   void dispose() {
@@ -91,379 +163,305 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
-  void _submit() {
-    if (_login.text.isEmpty || _pass.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Введите логин и пароль'),
-          backgroundColor: Colors.red[600],
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-      );
+  Future<void> _submit() async {
+    final login = _login.text.trim();
+    final pass = _pass.text.trim();
+    if (login.isEmpty || pass.isEmpty) {
+      _toast('Введите логин и пароль', isError: true);
       return;
     }
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const DocumentsPage()),
-    );
+    setState(() => _loading = true);
+    try {
+      await Api.I.login(login, pass); // токены сохраняются внутри Api
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const DocumentsPage()),
+      );
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      final msg = (data is Map && data['detail'] != null)
+          ? data['detail'].toString()
+          : 'Ошибка входа';
+      if (!mounted) return;
+      _toast(msg, isError: true);
+    } catch (_) {
+      if (!mounted) return;
+      _toast('Сервер недоступен', isError: true);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color(0xFF0066CC),
-              Color(0xFF004A99),
-              Color(0xFF003D7A),
-            ],
-          ),
-        ),
-        child: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 420),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    // Логотип и заголовок
-                    Container(
-                      width: 120,
-                      height: 120,
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(24),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.1),
-                            blurRadius: 20,
-                            offset: const Offset(0, 10),
-                          ),
-                        ],
-                      ),
-                      child: const Icon(
-                        Icons.account_balance,
-                        size: 60,
-                        color: Color(0xFF0066CC),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    const Text(
-                      'LogiDocs',
-                      style: TextStyle(
-                        fontSize: 32,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                        letterSpacing: -0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Электронный документооборот',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: Colors.white.withOpacity(0.8),
-                      ),
-                    ),
-                    const SizedBox(height: 48),
-
-                    // Форма входа
-                    Container(
-                      padding: const EdgeInsets.all(24),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(20),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.1),
-                            blurRadius: 20,
-                            offset: const Offset(0, 10),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Вход в систему',
-                            style: TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF333333),
-                            ),
-                          ),
-                          const SizedBox(height: 24),
-                          TextField(
-                            controller: _login,
-                            decoration: const InputDecoration(
-                              labelText: 'Логин',
-                              hintText: 'Введите ваш логин',
-                              prefixIcon: Icon(Icons.person_outline),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          TextField(
-                            controller: _pass,
-                            obscureText: _isObscured,
-                            decoration: InputDecoration(
-                              labelText: 'Пароль',
-                              hintText: 'Введите пароль',
-                              prefixIcon: const Icon(Icons.lock_outline),
-                              suffixIcon: IconButton(
-                                onPressed: () => setState(() => _isObscured = !_isObscured),
-                                icon: Icon(_isObscured ? Icons.visibility : Icons.visibility_off),
-                              ),
-                            ),
-                            onSubmitted: (_) => _submit(),
-                          ),
-                          const SizedBox(height: 24),
-                          ElevatedButton(
-                            onPressed: _submit,
-                            child: const Text('Войти в систему'),
-                          ),
-                          const SizedBox(height: 16),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              TextButton(
-                                onPressed: () {},
-                                child: const Text('Забыли пароль?'),
-                              ),
-                              TextButton(
-                                onPressed: () {},
-                                child: const Text('Регистрация'),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 32),
-
-                    // Дополнительная информация
-                    Text(
-                      'Техническая поддержка: 8-800-123-45-67',
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(0.7),
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
+  void _toast(String msg, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: isError
+            ? Colors.red.withValues(alpha: 0.9)
+            : const Color(0xFF4CAF50),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
-}
-
-/// -------------------- DOCUMENTS LIST --------------------
-class DocumentsPage extends StatefulWidget {
-  const DocumentsPage({super.key});
-
-  @override
-  State<DocumentsPage> createState() => _DocumentsPageState();
-}
-
-class _DocumentsPageState extends State<DocumentsPage> {
-  final List<_Doc> _documents = const [
-    _Doc(
-      title: 'Лицензия на перевозку №123',
-      type: 'Лицензия',
-      version: 3,
-      expiresAt: '31.12.2025',
-      icon: Icons.verified_user,
-      color: Color(0xFF4CAF50),
-    ),
-    _Doc(
-      title: 'Разрешение на маршрут А-45',
-      type: 'Разрешение',
-      version: 2,
-      expiresAt: '15.03.2026',
-      icon: Icons.route,
-      color: Color(0xFF2196F3),
-    ),
-    _Doc(
-      title: 'Страховой полис ТС',
-      type: 'Полис',
-      version: 1,
-      expiresAt: '01.05.2025',
-      icon: Icons.security,
-      color: Color(0xFFFF9800),
-    ),
-    _Doc(
-      title: 'Техосмотр транспорта',
-      type: 'Сертификат',
-      version: 1,
-      expiresAt: '20.02.2025',
-      icon: Icons.build_circle,
-      color: Color(0xFFFF5722),
-    ),
-  ];
-
-  Future<void> _refresh() async {
-    await Future.delayed(const Duration(milliseconds: 800));
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Документы обновлены'),
-          backgroundColor: const Color(0xFF4CAF50),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-      );
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8F9FA),
-      body: NestedScrollView(
-        headerSliverBuilder: (context, innerBoxIsScrolled) => [
-          SliverAppBar(
-            expandedHeight: 200,
-            pinned: true,
-            backgroundColor: Colors.white,
-            surfaceTintColor: Colors.transparent,
-            automaticallyImplyLeading: false,
-            flexibleSpace: FlexibleSpaceBar(
-              background: Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Color(0xFF0066CC), Color(0xFF004A99)],
-                  ),
-                ),
-                child: SafeArea(
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text(
-                              'Мои документы',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 28,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.2),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: IconButton(
-                                onPressed: () => _showProfileDialog(context),
-                                icon: const Icon(Icons.account_circle, color: Colors.white),
-                              ),
+      body: Stack(
+        children: [
+          // фон
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0xFF0066CC),
+                  Color(0xFF004A99),
+                  Color(0xFF003D7A),
+                ],
+              ),
+            ),
+          ),
+          SafeArea(
+            child: Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 120,
+                        height: 120,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(24),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.1),
+                              blurRadius: 20,
+                              offset: const Offset(0, 10),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Всего документов: ${_documents.length}',
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.8),
-                            fontSize: 16,
-                          ),
+                        child: const Icon(
+                          Icons.account_balance,
+                          size: 60,
+                          color: Color(0xFF0066CC),
                         ),
-                      ],
-                    ),
+                      ),
+                      const SizedBox(height: 24),
+                      const Text(
+                        'LogiDocs',
+                        style: TextStyle(
+                          fontSize: 32,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          letterSpacing: -0.5,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Электронный документооборот',
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: Colors.white.withValues(alpha: 0.8),
+                        ),
+                      ),
+                      const SizedBox(height: 48),
+
+                      // форма входа
+                      Container(
+                        padding: const EdgeInsets.all(24),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.1),
+                              blurRadius: 20,
+                              offset: const Offset(0, 10),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Вход в систему',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF333333),
+                              ),
+                            ),
+                            const SizedBox(height: 24),
+                            TextField(
+                              controller: _login,
+                              decoration: const InputDecoration(
+                                labelText: 'Логин',
+                                hintText: 'Введите ваш логин',
+                                prefixIcon: Icon(Icons.person_outline),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            TextField(
+                              controller: _pass,
+                              obscureText: _isObscured,
+                              decoration: InputDecoration(
+                                labelText: 'Пароль',
+                                hintText: 'Введите пароль',
+                                prefixIcon: const Icon(Icons.lock_outline),
+                                suffixIcon: IconButton(
+                                  onPressed: () => setState(
+                                    () => _isObscured = !_isObscured,
+                                  ),
+                                  icon: Icon(
+                                    _isObscured
+                                        ? Icons.visibility
+                                        : Icons.visibility_off,
+                                  ),
+                                ),
+                              ),
+                              onSubmitted: (_) => _submit(),
+                            ),
+                            const SizedBox(height: 24),
+                            ElevatedButton(
+                              onPressed: _loading ? null : _submit,
+                              child: Text(
+                                _loading ? 'Вход...' : 'Войти в систему',
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                TextButton(
+                                  onPressed: () {},
+                                  child: const Text('Забыли пароль?'),
+                                ),
+                                TextButton(
+                                  onPressed: () {},
+                                  child: const Text('Регистрация'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 32),
+                      Text(
+                        'Техническая поддержка: 8-800-123-45-67',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.7),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
             ),
           ),
         ],
-        body: RefreshIndicator(
-          onRefresh: _refresh,
-          child: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              // Документы
-              ..._documents.map((d) => _DocumentCard(doc: d)).toList(),
-              if (_documents.isEmpty)
-                Container(
-                  padding: const EdgeInsets.all(40),
-                  child: Column(
-                    children: [
-                      Icon(
-                        Icons.search_off,
-                        size: 64,
-                        color: Colors.grey[400],
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Документы не найдены',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-            ],
-          ),
-        ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {},
-        backgroundColor: const Color(0xFF4CAF50),
-        icon: const Icon(Icons.add),
-        label: const Text('Добавить'),
+    );
+  }
+}
+
+/// ================== СМЕНА ПАРОЛЯ ==================
+class ForceChangePasswordPage extends StatefulWidget {
+  const ForceChangePasswordPage({super.key, required this.username});
+  final String username;
+
+  @override
+  State<ForceChangePasswordPage> createState() =>
+      _ForceChangePasswordPageState();
+}
+
+class _ForceChangePasswordPageState extends State<ForceChangePasswordPage> {
+  final oldC = TextEditingController();
+  final newC = TextEditingController();
+  bool loading = false;
+
+  @override
+  void dispose() {
+    oldC.dispose();
+    newC.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (newC.text.length < 10) {
+      if (!mounted) return;
+      _toast('Пароль должен быть ≥ 10 символов', isError: true);
+      return;
+    }
+    setState(() => loading = true);
+    try {
+      await Api.I.changePassword(oldC.text, newC.text);
+      if (!mounted) return;
+      _toast('Пароль обновлён');
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const DocumentsPage()),
+      );
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      final msg = (data is Map && data['detail'] != null)
+          ? data['detail'].toString()
+          : 'Не удалось сменить пароль';
+      if (!mounted) return;
+      _toast(msg, isError: true);
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  void _toast(String msg, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: isError
+            ? Colors.red.withValues(alpha: 0.9)
+            : const Color(0xFF4CAF50),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
 
-  void _showProfileDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Профиль пользователя'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Смена пароля')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
           children: [
-            ListTile(
-              leading: const Icon(Icons.person),
-              title: const Text('Настройки профиля'),
-              onTap: () => Navigator.pop(context),
+            TextField(
+              controller: oldC,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Старый пароль',
+                prefixIcon: Icon(Icons.lock),
+              ),
             ),
-            ListTile(
-              leading: const Icon(Icons.security),
-              title: const Text('Безопасность'),
-              onTap: () => Navigator.pop(context),
+            const SizedBox(height: 12),
+            TextField(
+              controller: newC,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Новый пароль (≥10)',
+                prefixIcon: Icon(Icons.lock_reset),
+              ),
             ),
-            ListTile(
-              leading: const Icon(Icons.help),
-              title: const Text('Справка'),
-              onTap: () => Navigator.pop(context),
-            ),
-            const Divider(),
-            ListTile(
-              leading: const Icon(Icons.logout, color: Colors.red),
-              title: const Text('Выйти', style: TextStyle(color: Colors.red)),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(builder: (_) => const LoginPage()),
-                );
-              },
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: loading ? null : _submit,
+              child: Text(loading ? 'Сохраняю...' : 'Сохранить'),
             ),
           ],
         ),
@@ -472,9 +470,114 @@ class _DocumentsPageState extends State<DocumentsPage> {
   }
 }
 
-class _DocumentCard extends StatelessWidget {
-  const _DocumentCard({required this.doc});
-  final _Doc doc;
+/// ================== СПИСОК ДОКУМЕНТОВ ==================
+class DocumentsPage extends StatefulWidget {
+  const DocumentsPage({super.key});
+  @override
+  State<DocumentsPage> createState() => _DocumentsPageState();
+}
+
+class _DocumentsPageState extends State<DocumentsPage> {
+  List<Doc> _documents = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final list = await Api.I.getDocuments();
+      if (!mounted) return;
+      setState(() {
+        _documents = list;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ошибка загрузки документов')),
+      );
+    }
+  }
+
+  Future<void> _refresh() async {
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Документы обновлены'),
+        backgroundColor: const Color(0xFF4CAF50),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8F9FA),
+      appBar: AppBar(
+        title: const Text('Мои документы'),
+        actions: [
+          IconButton(
+            tooltip: 'Выход',
+            onPressed: () async {
+              await Api.I.logout();
+              if (!mounted) return;
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginPage()),
+                (route) => false,
+              );
+            },
+            icon: const Icon(Icons.logout),
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _refresh,
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  for (final d in _documents) DocumentCard(doc: d),
+                  if (_documents.isEmpty)
+                    Container(
+                      padding: const EdgeInsets.all(40),
+                      child: Column(
+                        children: [
+                          Icon(
+                            Icons.search_off,
+                            size: 64,
+                            color: Colors.grey.withValues(alpha: 0.4),
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Документы не найдены',
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(
+                                  color: Colors.grey.withValues(alpha: 0.6),
+                                ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+    );
+  }
+}
+
+class DocumentCard extends StatelessWidget {
+  const DocumentCard({super.key, required this.doc});
+  final Doc doc;
 
   @override
   Widget build(BuildContext context) {
@@ -485,7 +588,7 @@ class _DocumentCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, 2),
           ),
@@ -496,9 +599,11 @@ class _DocumentCard extends StatelessWidget {
         onTap: () {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Открыть: ${doc.title} (v${doc.version})'),
+              content: Text('Открыть: ${doc.title} (v${doc.version ?? '-'})'),
               behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
           );
         },
@@ -510,7 +615,7 @@ class _DocumentCard extends StatelessWidget {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: doc.color.withOpacity(0.1),
+                  color: doc.color.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(doc.icon, color: doc.color, size: 24),
@@ -530,25 +635,33 @@ class _DocumentCard extends StatelessWidget {
                     const SizedBox(height: 8),
                     Row(
                       children: [
-                        _Chip(text: doc.type, color: Colors.grey[700]!),
+                        _Chip(text: doc.type ?? 'Документ', color: Colors.grey),
                         const SizedBox(width: 8),
-                        _Chip(text: 'v${doc.version}', color: const Color(0xFF0066CC)),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Icon(Icons.schedule, size: 14, color: Colors.grey[500]),
-                        const SizedBox(width: 4),
-                        Text(
-                          'до ${doc.expiresAt}',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey[600],
-                          ),
+                        _Chip(
+                          text: 'v${doc.version ?? '-'}',
+                          color: const Color(0xFF0066CC),
                         ),
                       ],
                     ),
+                    const SizedBox(height: 8),
+                    if (doc.expiresAt != null)
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.schedule,
+                            size: 14,
+                            color: Colors.grey.withValues(alpha: 0.6),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'до ${doc.expiresAt}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.withValues(alpha: 0.7),
+                            ),
+                          ),
+                        ],
+                      ),
                   ],
                 ),
               ),
@@ -571,9 +684,9 @@ class _Chip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
       child: Text(
         text,
@@ -587,20 +700,56 @@ class _Chip extends StatelessWidget {
   }
 }
 
-class _Doc {
+/// Публичная модель документа (без подчёркивания)
+class Doc {
+  final int id;
   final String title;
-  final String type;
-  final int version;
-  final String expiresAt;
+  final String? type;
+  final int? version;
+  final String? expiresAt;
+
+  // Иконка/цвет — вычисляем по типу для визуала
   final IconData icon;
   final Color color;
 
-  const _Doc({
+  Doc({
+    required this.id,
     required this.title,
-    required this.type,
-    required this.version,
-    required this.expiresAt,
+    this.type,
+    this.version,
+    this.expiresAt,
     required this.icon,
     required this.color,
   });
+
+  factory Doc.fromJson(Map<String, dynamic> m) {
+    final t = (m['type'] as String?)?.toLowerCase() ?? '';
+    IconData icon = Icons.description;
+    Color color = const Color(0xFF0066CC);
+    if (t.contains('лиценз')) {
+      icon = Icons.verified_user;
+      color = const Color(0xFF4CAF50);
+    } else if (t.contains('разреш')) {
+      icon = Icons.route;
+      color = const Color(0xFF2196F3);
+    } else if (t.contains('полис')) {
+      icon = Icons.security;
+      color = const Color(0xFFFF9800);
+    } else if (t.contains('сертифик')) {
+      icon = Icons.assignment_turned_in;
+      color = const Color(0xFF7E57C2);
+    }
+
+    return Doc(
+      id: m['id'] as int,
+      title: (m['title'] ?? '').toString(),
+      type: m['type']?.toString(),
+      version: m['version'] is int
+          ? m['version'] as int
+          : int.tryParse('${m['version']}'),
+      expiresAt: m['expires_at']?.toString(),
+      icon: icon,
+      color: color,
+    );
+  }
 }
