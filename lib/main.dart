@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:pdfx/pdfx.dart';
 
 /// === НАСТРОЙКИ API ===
 /// Если backend (Django) на этом же ПК:
@@ -65,6 +66,10 @@ class Api {
     await _storage.deleteAll();
     _dio.options.headers.remove('Authorization');
   }
+
+  Future<void> downloadToFileAndOpen(int id, String s) async {}
+
+  Future fetchDocumentBytes(int docId) async {}
 }
 
 /// ================== ПРИЛОЖЕНИЕ ==================
@@ -372,104 +377,6 @@ class _LoginPageState extends State<LoginPage> {
   }
 }
 
-/// ================== СМЕНА ПАРОЛЯ ==================
-class ForceChangePasswordPage extends StatefulWidget {
-  const ForceChangePasswordPage({super.key, required this.username});
-  final String username;
-
-  @override
-  State<ForceChangePasswordPage> createState() =>
-      _ForceChangePasswordPageState();
-}
-
-class _ForceChangePasswordPageState extends State<ForceChangePasswordPage> {
-  final oldC = TextEditingController();
-  final newC = TextEditingController();
-  bool loading = false;
-
-  @override
-  void dispose() {
-    oldC.dispose();
-    newC.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    if (newC.text.length < 10) {
-      if (!mounted) return;
-      _toast('Пароль должен быть ≥ 10 символов', isError: true);
-      return;
-    }
-    setState(() => loading = true);
-    try {
-      await Api.I.changePassword(oldC.text, newC.text);
-      if (!mounted) return;
-      _toast('Пароль обновлён');
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const DocumentsPage()),
-      );
-    } on DioException catch (e) {
-      final data = e.response?.data;
-      final msg = (data is Map && data['detail'] != null)
-          ? data['detail'].toString()
-          : 'Не удалось сменить пароль';
-      if (!mounted) return;
-      _toast(msg, isError: true);
-    } finally {
-      if (mounted) setState(() => loading = false);
-    }
-  }
-
-  void _toast(String msg, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        backgroundColor: isError
-            ? Colors.red.withValues(alpha: 0.9)
-            : const Color(0xFF4CAF50),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Смена пароля')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            TextField(
-              controller: oldC,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: 'Старый пароль',
-                prefixIcon: Icon(Icons.lock),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: newC,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: 'Новый пароль (≥10)',
-                prefixIcon: Icon(Icons.lock_reset),
-              ),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: loading ? null : _submit,
-              child: Text(loading ? 'Сохраняю...' : 'Сохранить'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 /// ================== СПИСОК ДОКУМЕНТОВ ==================
 class DocumentsPage extends StatefulWidget {
   const DocumentsPage({super.key});
@@ -596,16 +503,17 @@ class DocumentCard extends StatelessWidget {
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        onTap: () {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Открыть: ${doc.title} (v${doc.version ?? '-'})'),
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          );
+        onTap: () async {
+          try {
+            // Desktop/Android/iOS:
+            await Api.I.downloadToFileAndOpen(doc.id, '${doc.title}.pdf');
+            // Если запускаешь в Web, вместо этого:
+            // await Api.I.openInBrowser(doc.id);
+          } catch (_) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Не удалось открыть документ')),
+            );
+          }
         },
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -751,5 +659,46 @@ class Doc {
       icon: icon,
       color: color,
     );
+  }
+}
+
+class PdfViewerPage extends StatefulWidget {
+  const PdfViewerPage({super.key, required this.docId, required this.title});
+  final int docId;
+  final String title;
+
+  @override
+  State<PdfViewerPage> createState() => _PdfViewerPageState();
+}
+
+class _PdfViewerPageState extends State<PdfViewerPage> {
+  PdfController? controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final bytes = await Api.I.fetchDocumentBytes(widget.docId);
+    controller = PdfController(document: PdfDocument.openData(bytes));
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.title)),
+      body: controller == null
+          ? const Center(child: CircularProgressIndicator())
+          : PdfView(controller: controller!),
+    );
+  }
+
+  @override
+  void dispose() {
+    controller?.dispose();
+    super.dispose();
   }
 }
