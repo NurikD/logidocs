@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:dio/dio.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:pdfx/pdfx.dart';
-
-/// === НАСТРОЙКИ API ===
-/// Если backend (Django) на этом же ПК:
-const String kBaseUrl = 'http://127.0.0.1:8000';
-
-/// Если Android-эмулятор: const kBaseUrl = 'http://10.0.2.2:8000';
+import 'package:photo_view/photo_view.dart';
+import 'package:intl/intl.dart';
+import 'api.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -15,66 +13,8 @@ void main() async {
   runApp(const LogiDocsApp());
 }
 
-/// ================== API-КЛИЕНТ ==================
-class Api {
-  Api._();
-  static final Api I = Api._();
-
-  final Dio _dio = Dio(BaseOptions(baseUrl: kBaseUrl));
-  final _storage = const FlutterSecureStorage();
-
-  Future<void> init() async {
-    final access = await _storage.read(key: 'access');
-    if (access != null) {
-      _dio.options.headers['Authorization'] = 'Bearer $access';
-    }
-  }
-
-  Future<Map<String, dynamic>> login(String username, String password) async {
-    final res = await _dio.post(
-      '/api/auth/token/',
-      data: {'username': username, 'password': password},
-    );
-    final data = Map<String, dynamic>.from(res.data);
-    await _storage.write(key: 'access', value: data['access']);
-    await _storage.write(key: 'refresh', value: data['refresh']);
-    _dio.options.headers['Authorization'] = 'Bearer ${data['access']}';
-    return data; // содержит must_change_pw
-  }
-
-  Future<void> changePassword(String oldPw, String newPw) async {
-    await _dio.post(
-      '/api/auth/change-password/',
-      data: {'old_password': oldPw, 'new_password': newPw},
-    );
-  }
-
-  Future<List<Doc>> getDocuments() async {
-    final access = await _storage.read(key: 'access');
-    if (access != null) {
-      _dio.options.headers['Authorization'] = 'Bearer $access';
-    }
-    final res = await _dio.get('/api/documents/');
-    final list = (res.data as List)
-        .cast<Map>()
-        .map((m) => Doc.fromJson(Map<String, dynamic>.from(m)))
-        .toList();
-    return list;
-  }
-
-  Future<void> logout() async {
-    await _storage.deleteAll();
-    _dio.options.headers.remove('Authorization');
-  }
-
-  Future<void> downloadToFileAndOpen(int id, String s) async {}
-
-  Future fetchDocumentBytes(int docId) async {}
-}
-
-/// ================== ПРИЛОЖЕНИЕ ==================
 class LogiDocsApp extends StatelessWidget {
-  const LogiDocsApp({super.key});
+  const LogiDocsApp({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -134,10 +74,10 @@ class LogiDocsApp extends StatelessWidget {
             ),
           ),
         ),
-        cardTheme: const CardThemeData(
+        cardTheme: CardThemeData(
           elevation: 0,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.all(Radius.circular(16)),
+            borderRadius: BorderRadius.circular(16),
           ),
           color: Colors.white,
           surfaceTintColor: Colors.transparent,
@@ -148,9 +88,9 @@ class LogiDocsApp extends StatelessWidget {
   }
 }
 
-/// ================== LOGIN ==================
 class LoginPage extends StatefulWidget {
-  const LoginPage({super.key});
+  const LoginPage({Key? key}) : super(key: key);
+
   @override
   State<LoginPage> createState() => _LoginPageState();
 }
@@ -177,16 +117,17 @@ class _LoginPageState extends State<LoginPage> {
     }
     setState(() => _loading = true);
     try {
-      await Api.I.login(login, pass); // токены сохраняются внутри Api
+      final data = await Api.I.login(login, pass);
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const DocumentsPage()),
-      );
+      if (data['must_change_pw'] == true) {
+        _toast('Пожалуйста, смените пароль');
+      } else {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const DocumentsPage()),
+        );
+      }
     } on DioException catch (e) {
-      final data = e.response?.data;
-      final msg = (data is Map && data['detail'] != null)
-          ? data['detail'].toString()
-          : 'Ошибка входа';
+      final msg = e.response?.data['detail']?.toString() ?? 'Ошибка входа';
       if (!mounted) return;
       _toast(msg, isError: true);
     } catch (_) {
@@ -202,7 +143,7 @@ class _LoginPageState extends State<LoginPage> {
       SnackBar(
         content: Text(msg),
         backgroundColor: isError
-            ? Colors.red.withValues(alpha: 0.9)
+            ? Colors.red.withOpacity(0.9)
             : const Color(0xFF4CAF50),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -215,7 +156,6 @@ class _LoginPageState extends State<LoginPage> {
     return Scaffold(
       body: Stack(
         children: [
-          // фон
           Container(
             decoration: const BoxDecoration(
               gradient: LinearGradient(
@@ -246,7 +186,7 @@ class _LoginPageState extends State<LoginPage> {
                           borderRadius: BorderRadius.circular(24),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.1),
+                              color: Colors.black.withOpacity(0.1),
                               blurRadius: 20,
                               offset: const Offset(0, 10),
                             ),
@@ -273,12 +213,10 @@ class _LoginPageState extends State<LoginPage> {
                         'Электронный документооборот',
                         style: TextStyle(
                           fontSize: 16,
-                          color: Colors.white.withValues(alpha: 0.8),
+                          color: Colors.white.withOpacity(0.8),
                         ),
                       ),
                       const SizedBox(height: 48),
-
-                      // форма входа
                       Container(
                         padding: const EdgeInsets.all(24),
                         decoration: BoxDecoration(
@@ -286,7 +224,7 @@ class _LoginPageState extends State<LoginPage> {
                           borderRadius: BorderRadius.circular(20),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.1),
+                              color: Colors.black.withOpacity(0.1),
                               blurRadius: 20,
                               offset: const Offset(0, 10),
                             ),
@@ -361,7 +299,7 @@ class _LoginPageState extends State<LoginPage> {
                       Text(
                         'Техническая поддержка: 8-800-123-45-67',
                         style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.7),
+                          color: Colors.white.withOpacity(0.7),
                           fontSize: 12,
                         ),
                       ),
@@ -377,9 +315,9 @@ class _LoginPageState extends State<LoginPage> {
   }
 }
 
-/// ================== СПИСОК ДОКУМЕНТОВ ==================
 class DocumentsPage extends StatefulWidget {
-  const DocumentsPage({super.key});
+  const DocumentsPage({Key? key}) : super(key: key);
+
   @override
   State<DocumentsPage> createState() => _DocumentsPageState();
 }
@@ -396,28 +334,33 @@ class _DocumentsPageState extends State<DocumentsPage> {
 
   Future<void> _load() async {
     try {
-      final list = await Api.I.getDocuments();
+      final rawList = await Api.I.getDocuments();
+      final list = rawList.map((m) => Doc.fromJson(m)).toList();
       if (!mounted) return;
       setState(() {
         _documents = list;
         _loading = false;
       });
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Ошибка загрузки документов')),
-      );
+      _toast('Ошибка загрузки документов: $e', isError: true);
     }
   }
 
   Future<void> _refresh() async {
     await _load();
     if (!mounted) return;
+    _toast('Документы обновлены');
+  }
+
+  void _toast(String msg, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: const Text('Документы обновлены'),
-        backgroundColor: const Color(0xFF4CAF50),
+        content: Text(msg),
+        backgroundColor: isError
+            ? Colors.red.withOpacity(0.9)
+            : const Color(0xFF4CAF50),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
@@ -462,15 +405,14 @@ class _DocumentsPageState extends State<DocumentsPage> {
                           Icon(
                             Icons.search_off,
                             size: 64,
-                            color: Colors.grey.withValues(alpha: 0.4),
+                            color: Colors.grey.withOpacity(0.4),
                           ),
                           const SizedBox(height: 16),
                           Text(
                             'Документы не найдены',
-                            style: Theme.of(context).textTheme.titleMedium
-                                ?.copyWith(
-                                  color: Colors.grey.withValues(alpha: 0.6),
-                                ),
+                            style: TextStyle(
+                              color: Colors.grey.withOpacity(0.6),
+                            ),
                           ),
                         ],
                       ),
@@ -483,19 +425,25 @@ class _DocumentsPageState extends State<DocumentsPage> {
 }
 
 class DocumentCard extends StatelessWidget {
-  const DocumentCard({super.key, required this.doc});
+  const DocumentCard({Key? key, required this.doc}) : super(key: key);
   final Doc doc;
 
   @override
   Widget build(BuildContext context) {
+    final expiredColor = doc.isExpired
+        ? Colors.red
+        : Colors.grey.withOpacity(0.7);
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
+        border: doc.isExpired
+            ? Border.all(color: Colors.red.withOpacity(0.5))
+            : null,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
+            color: Colors.black.withOpacity(0.05),
             blurRadius: 10,
             offset: const Offset(0, 2),
           ),
@@ -503,17 +451,15 @@ class DocumentCard extends StatelessWidget {
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        onTap: () async {
-          try {
-            // Desktop/Android/iOS:
-            await Api.I.downloadToFileAndOpen(doc.id, '${doc.title}.pdf');
-            // Если запускаешь в Web, вместо этого:
-            // await Api.I.openInBrowser(doc.id);
-          } catch (_) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Не удалось открыть документ')),
-            );
-          }
+        onTap: () {
+          // Убираем проверку kIsWeb и всегда открываем внутри приложения
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) =>
+                  DocumentViewerPage(docId: doc.id, title: doc.title),
+            ),
+          );
         },
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -523,7 +469,7 @@ class DocumentCard extends StatelessWidget {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: doc.color.withValues(alpha: 0.1),
+                  color: doc.color.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(doc.icon, color: doc.color, size: 24),
@@ -555,19 +501,19 @@ class DocumentCard extends StatelessWidget {
                     if (doc.expiresAt != null)
                       Row(
                         children: [
-                          Icon(
-                            Icons.schedule,
-                            size: 14,
-                            color: Colors.grey.withValues(alpha: 0.6),
-                          ),
+                          Icon(Icons.schedule, size: 14, color: expiredColor),
                           const SizedBox(width: 4),
                           Text(
                             'до ${doc.expiresAt}',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey.withValues(alpha: 0.7),
-                            ),
+                            style: TextStyle(fontSize: 12, color: expiredColor),
                           ),
+                          if (doc.isExpired) ...[
+                            const SizedBox(width: 8),
+                            const Text(
+                              '(просрочен)',
+                              style: TextStyle(fontSize: 12, color: Colors.red),
+                            ),
+                          ],
                         ],
                       ),
                   ],
@@ -583,7 +529,8 @@ class DocumentCard extends StatelessWidget {
 }
 
 class _Chip extends StatelessWidget {
-  const _Chip({required this.text, required this.color});
+  const _Chip({Key? key, required this.text, required this.color})
+    : super(key: key);
   final String text;
   final Color color;
 
@@ -592,9 +539,9 @@ class _Chip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
+        color: color.withOpacity(0.1),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
+        border: Border.all(color: color.withOpacity(0.3)),
       ),
       child: Text(
         text,
@@ -608,17 +555,15 @@ class _Chip extends StatelessWidget {
   }
 }
 
-/// Публичная модель документа (без подчёркивания)
 class Doc {
   final int id;
   final String title;
   final String? type;
   final int? version;
   final String? expiresAt;
-
-  // Иконка/цвет — вычисляем по типу для визуала
   final IconData icon;
   final Color color;
+  final bool isExpired;
 
   Doc({
     required this.id,
@@ -628,6 +573,7 @@ class Doc {
     this.expiresAt,
     required this.icon,
     required this.color,
+    required this.isExpired,
   });
 
   factory Doc.fromJson(Map<String, dynamic> m) {
@@ -648,6 +594,16 @@ class Doc {
       color = const Color(0xFF7E57C2);
     }
 
+    bool isExpired = false;
+    if (m['expires_at'] != null) {
+      try {
+        final expireDate = DateFormat('yyyy-MM-dd').parse(m['expires_at']);
+        isExpired = expireDate.isBefore(DateTime.now());
+      } catch (_) {
+        // Invalid date - ignore
+      }
+    }
+
     return Doc(
       id: m['id'] as int,
       title: (m['title'] ?? '').toString(),
@@ -658,21 +614,26 @@ class Doc {
       expiresAt: m['expires_at']?.toString(),
       icon: icon,
       color: color,
+      isExpired: isExpired,
     );
   }
 }
 
-class PdfViewerPage extends StatefulWidget {
-  const PdfViewerPage({super.key, required this.docId, required this.title});
+class DocumentViewerPage extends StatefulWidget {
+  const DocumentViewerPage({Key? key, required this.docId, required this.title})
+    : super(key: key);
   final int docId;
   final String title;
 
   @override
-  State<PdfViewerPage> createState() => _PdfViewerPageState();
+  State<DocumentViewerPage> createState() => _DocumentViewerPageState();
 }
 
-class _PdfViewerPageState extends State<PdfViewerPage> {
-  PdfController? controller;
+class _DocumentViewerPageState extends State<DocumentViewerPage> {
+  Uint8List? _bytes;
+  String? _fileType; // 'pdf', 'image', null if error
+  String? _error;
+  bool _isLoading = true;
 
   @override
   void initState() {
@@ -681,24 +642,59 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   }
 
   Future<void> _load() async {
-    final bytes = await Api.I.fetchDocumentBytes(widget.docId);
-    controller = PdfController(document: PdfDocument.openData(bytes));
-    setState(() {});
+    setState(() => _isLoading = true);
+    try {
+      final bytes = await Api.I.fetchDocumentBytes(widget.docId);
+      final fileType = _detectFileType(bytes);
+      if (!mounted) return;
+      setState(() {
+        _bytes = bytes;
+        _fileType = fileType;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Ошибка загрузки: $e';
+        _isLoading = false;
+      });
+    }
+  }
+
+  String? _detectFileType(Uint8List bytes) {
+    if (bytes.length < 4) return null;
+    final header = String.fromCharCodes(bytes.sublist(0, 4));
+    if (header == '%PDF') return 'pdf';
+    if (bytes[0] == 0xFF && bytes[1] == 0xD8) return 'image'; // JPEG
+    if (bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4E &&
+        bytes[3] == 0x47)
+      return 'image'; // PNG
+    return null; // Unknown
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(widget.title)),
-      body: controller == null
+      body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : PdfView(controller: controller!),
+          : _error != null
+          ? Center(
+              child: Text(_error!, style: const TextStyle(color: Colors.red)),
+            )
+          : _bytes == null
+          ? const Center(child: Text('Ошибка загрузки документа'))
+          : _fileType == 'pdf'
+          ? PdfView(
+              controller: PdfController(
+                document: PdfDocument.openData(_bytes!),
+              ),
+            )
+          : _fileType == 'image'
+          ? PhotoView(imageProvider: MemoryImage(_bytes!))
+          : const Center(child: Text('Неподдерживаемый формат')),
     );
-  }
-
-  @override
-  void dispose() {
-    controller?.dispose();
-    super.dispose();
   }
 }

@@ -44,23 +44,23 @@ class Api {
           final isAuthError = status == 401;
           final req = e.requestOptions;
 
-          // чтобы не зациклиться: помечаем попытку
+          // Для отладки
+          print('Interceptor error: $status, path: ${req.path}');
+
           final alreadyRetried = req.extra['__retried__'] == true;
 
           if (isAuthError && !alreadyRetried) {
             try {
               await _refreshAccessToken();
-              // помечаем как повторённый
               req.extra['__retried__'] = true;
-              // обновим заголовок запроса
               final access = await _storage.read(key: 'access');
               if (access != null) {
                 req.headers['Authorization'] = 'Bearer $access';
               }
               final clone = await dio.fetch(req);
               return handler.resolve(clone);
-            } catch (_) {
-              // refresh не удался — чистим сессию
+            } catch (e) {
+              print('Refresh failed: $e');
               await logout();
             }
           }
@@ -72,7 +72,7 @@ class Api {
 
   Future<Map<String, dynamic>> login(String username, String password) async {
     final res = await dio.post(
-      '/api/auth/token/', // если у тебя /api/token/ — замени здесь
+      '/api/auth/token/', // Убедитесь, что путь совпадает
       data: {'username': username, 'password': password},
     );
     final data = Map<String, dynamic>.from(res.data as Map);
@@ -106,19 +106,27 @@ class Api {
   /// ----- Работа с PDF -----
 
   Future<Uint8List> fetchDocumentBytes(int id) async {
-    await _ensureAuthHeader();
-    final res = await dio.get(
-      '/api/documents/$id/download/',
-      options: Options(responseType: ResponseType.bytes),
-    );
-    // res.data здесь List<int> (в bytes-режиме)
-    final bytes = (res.data as List<int>);
-    return Uint8List.fromList(bytes);
+    // Временно убираем аутентификацию для тестирования
+    dio.options.headers.remove('Authorization'); // Удаляем токен
+    print(
+      'Fetching document $id with headers: ${dio.options.headers}',
+    ); // Для отладки
+    try {
+      final res = await dio.get(
+        '/api/documents/$id/download/',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      return Uint8List.fromList(res.data as List<int>);
+    } on DioException catch (e) {
+      print(
+        'Fetch error: ${e.response?.statusCode}, ${e.message}',
+      ); // Логируем ошибку
+      rethrow; // Передаём ошибку дальше
+    }
   }
 
   Future<void> downloadToFileAndOpen(int id, String filename) async {
     if (kIsWeb) {
-      // На web файловой системы нет — просто откроем ссылку
       await openInBrowser(id);
       return;
     }
@@ -130,7 +138,6 @@ class Api {
     await OpenFilex.open(path);
   }
 
-  // Для Web — открыть в браузере
   Future<void> openInBrowser(int id) async {
     final uri = Uri.parse('$kBaseUrl/api/documents/$id/download/');
     await launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -149,7 +156,6 @@ class Api {
 
   Future<void> _refreshAccessToken() async {
     if (_isRefreshing) {
-      // если уже идёт refresh — ждём, пока другой поток закончит
       while (_isRefreshing) {
         await Future.delayed(const Duration(milliseconds: 50));
       }
@@ -158,25 +164,18 @@ class Api {
     _isRefreshing = true;
     try {
       final refresh = await _storage.read(key: 'refresh');
-      if (refresh == null) {
-        throw Exception('No refresh token');
-      }
+      if (refresh == null) throw Exception('No refresh token');
+      print('Attempting to refresh token with refresh: $refresh');
       final res = await dio.post(
-        '/api/auth/token/refresh/', // если у тебя /api/token/refresh/ — замени здесь
+        '/api/auth/token/refresh/', // Убедитесь, что путь совпадает
         data: {'refresh': refresh},
         options: Options(
-          headers: {
-            // refresh обычно без Authorization
-            'Authorization': null,
-            'Content-Type': 'application/json',
-          },
+          headers: {'Authorization': null, 'Content-Type': 'application/json'},
         ),
       );
       final data = Map<String, dynamic>.from(res.data as Map);
       final newAccess = data['access'] as String?;
-      if (newAccess == null) {
-        throw Exception('No access in refresh response');
-      }
+      if (newAccess == null) throw Exception('No access in refresh response');
       await _storage.write(key: 'access', value: newAccess);
       dio.options.headers['Authorization'] = 'Bearer $newAccess';
     } finally {
