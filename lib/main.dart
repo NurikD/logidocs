@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:dio/dio.dart';
 import 'package:pdfx/pdfx.dart';
 import 'package:photo_view/photo_view.dart';
@@ -83,7 +82,41 @@ class LogiDocsApp extends StatelessWidget {
           surfaceTintColor: Colors.transparent,
         ),
       ),
-      home: const LoginPage(),
+      home: const AuthGate(),
+    );
+  }
+}
+
+class AuthGate extends StatefulWidget {
+  const AuthGate({Key? key}) : super(key: key);
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  Future<bool>? _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = () async {
+      await Api.I.init();
+      return Api.I.hasSession();
+    }();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<bool>(
+      future: _future,
+      builder: (context, snap) {
+        if (!snap.hasData) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        return snap.data! ? const DocumentsPage() : const LoginPage();
+      },
     );
   }
 }
@@ -278,20 +311,6 @@ class _LoginPageState extends State<LoginPage> {
                                 _loading ? 'Вход...' : 'Войти в систему',
                               ),
                             ),
-                            const SizedBox(height: 16),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                TextButton(
-                                  onPressed: () {},
-                                  child: const Text('Забыли пароль?'),
-                                ),
-                                TextButton(
-                                  onPressed: () {},
-                                  child: const Text('Регистрация'),
-                                ),
-                              ],
-                            ),
                           ],
                         ),
                       ),
@@ -369,57 +388,243 @@ class _DocumentsPageState extends State<DocumentsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final expiredDocs = _documents.where((doc) => doc.isExpired).length;
+    final expiringSoon = _documents
+        .where((doc) => doc.isExpiringSoon && !doc.isExpired)
+        .length;
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
-      appBar: AppBar(
-        title: const Text('Мои документы'),
-        actions: [
-          IconButton(
-            tooltip: 'Выход',
-            onPressed: () async {
-              await Api.I.logout();
-              if (!mounted) return;
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (_) => const LoginPage()),
-                (route) => false,
-              );
-            },
-            icon: const Icon(Icons.logout),
-          ),
-        ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _refresh,
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  for (final d in _documents) DocumentCard(doc: d),
-                  if (_documents.isEmpty)
-                    Container(
-                      padding: const EdgeInsets.all(40),
-                      child: Column(
-                        children: [
-                          Icon(
-                            Icons.search_off,
-                            size: 64,
-                            color: Colors.grey.withOpacity(0.4),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Документы не найдены',
-                            style: TextStyle(
-                              color: Colors.grey.withOpacity(0.6),
-                            ),
-                          ),
-                        ],
+      body: CustomScrollView(
+        slivers: [
+          SliverAppBar(
+            expandedHeight: 200,
+            floating: false,
+            pinned: true,
+            backgroundColor: const Color(0xFF0066CC),
+            flexibleSpace: FlexibleSpaceBar(
+              title: const Text(
+                'Мои документы',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              background: Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Color(0xFF0066CC),
+                      Color(0xFF004A99),
+                      Color(0xFF003D7A),
+                    ],
+                  ),
+                ),
+                child: Stack(
+                  children: [
+                    Positioned(
+                      right: -50,
+                      top: -50,
+                      child: Container(
+                        width: 200,
+                        height: 200,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white.withOpacity(0.1),
+                        ),
                       ),
                     ),
-                ],
+                    Positioned(
+                      right: 20,
+                      top: 100,
+                      child: Icon(
+                        Icons.folder_open,
+                        size: 80,
+                        color: Colors.white.withOpacity(0.2),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
+            actions: [
+              IconButton(
+                tooltip: 'Обновить',
+                onPressed: _refresh,
+                icon: const Icon(Icons.refresh, color: Colors.white),
+              ),
+              IconButton(
+                tooltip: 'Выход',
+                onPressed: () async {
+                  await Api.I.logout();
+                  if (!mounted) return;
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (_) => const LoginPage()),
+                    (route) => false,
+                  );
+                },
+                icon: const Icon(Icons.logout, color: Colors.white),
+              ),
+            ],
+          ),
+          if (!_loading)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    // // Статистика
+                    // _StatsCard(
+                    //   totalDocs: _documents.length,
+                    //   expiredDocs: expiredDocs,
+                    //   expiringSoon: expiringSoon,
+                    // ),
+                    const SizedBox(height: 20),
+                    // Заголовок секции
+                    Row(
+                      children: [
+                        const Icon(Icons.description, color: Color(0xFF0066CC)),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Документы',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF333333),
+                          ),
+                        ),
+                        const Spacer(),
+                        if (_documents.isNotEmpty)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0066CC).withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              '${_documents.length}',
+                              style: const TextStyle(
+                                color: Color(0xFF0066CC),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                ),
+              ),
+            ),
+          if (_loading)
+            const SliverFillRemaining(
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (_documents.isEmpty)
+            SliverFillRemaining(
+              child: Container(
+                padding: const EdgeInsets.all(40),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      width: 120,
+                      height: 120,
+                      decoration: BoxDecoration(
+                        color: Colors.grey.withOpacity(0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.folder_open,
+                        size: 60,
+                        color: Colors.grey.withOpacity(0.4),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      'Документы не найдены',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.grey.withOpacity(0.6),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Документы появятся здесь автоматически',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey.withOpacity(0.5),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate((context, index) {
+                  return Padding(
+                    padding: EdgeInsets.only(
+                      bottom: index == _documents.length - 1 ? 20 : 12,
+                    ),
+                    child: DocumentCard(doc: _documents[index]),
+                  );
+                }, childCount: _documents.length),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatItem extends StatelessWidget {
+  const _StatItem({
+    Key? key,
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.color,
+  }) : super(key: key);
+
+  final IconData icon;
+  final String title;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Container(
+          width: 50,
+          height: 50,
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(icon, color: color, size: 24),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        Text(title, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+      ],
     );
   }
 }
@@ -432,14 +637,18 @@ class DocumentCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final expiredColor = doc.isExpired
         ? Colors.red
+        : doc.isExpiringSoon
+        ? Colors.orange
         : Colors.grey.withOpacity(0.7);
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: doc.isExpired
-            ? Border.all(color: Colors.red.withOpacity(0.5))
+            ? Border.all(color: Colors.red.withOpacity(0.5), width: 2)
+            : doc.isExpiringSoon
+            ? Border.all(color: Colors.orange.withOpacity(0.5), width: 1)
             : null,
         boxShadow: [
           BoxShadow(
@@ -449,78 +658,122 @@ class DocumentCard extends StatelessWidget {
           ),
         ],
       ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: () {
-          // Убираем проверку kIsWeb и всегда открываем внутри приложения
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) =>
-                  DocumentViewerPage(docId: doc.id, title: doc.title),
-            ),
-          );
-        },
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: doc.color.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(doc.icon, color: doc.color, size: 24),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) =>
+                    DocumentViewerPage(docId: doc.id, title: doc.title),
               ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      doc.title,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [doc.color, doc.color.withOpacity(0.7)],
+                    ),
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: doc.color.withOpacity(0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        _Chip(text: doc.type ?? 'Документ', color: Colors.grey),
-                        const SizedBox(width: 8),
-                        _Chip(
-                          text: 'v${doc.version ?? '-'}',
-                          color: const Color(0xFF0066CC),
+                    ],
+                  ),
+                  child: Icon(doc.icon, color: Colors.white, size: 28),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        doc.title,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF333333),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    if (doc.expiresAt != null)
+                      ),
+                      const SizedBox(height: 8),
                       Row(
                         children: [
-                          Icon(Icons.schedule, size: 14, color: expiredColor),
-                          const SizedBox(width: 4),
-                          Text(
-                            'до ${doc.expiresAt}',
-                            style: TextStyle(fontSize: 12, color: expiredColor),
+                          _Chip(
+                            text: doc.type ?? 'Документ',
+                            color: Colors.grey,
                           ),
-                          if (doc.isExpired) ...[
-                            const SizedBox(width: 8),
-                            const Text(
-                              '(просрочен)',
-                              style: TextStyle(fontSize: 12, color: Colors.red),
-                            ),
-                          ],
+                          const SizedBox(width: 8),
+                          _Chip(
+                            text: 'v${doc.version ?? '-'}',
+                            color: const Color(0xFF0066CC),
+                          ),
                         ],
                       ),
-                  ],
+                      if (doc.expiresAt != null) ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Icon(
+                              doc.isExpired
+                                  ? Icons.error
+                                  : doc.isExpiringSoon
+                                  ? Icons.warning
+                                  : Icons.schedule,
+                              size: 16,
+                              color: expiredColor,
+                            ),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                doc.isExpired
+                                    ? 'Просрочен ${doc.expiresAt}'
+                                    : doc.isExpiringSoon
+                                    ? 'Истекает ${doc.expiresAt}'
+                                    : 'до ${doc.expiresAt}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: expiredColor,
+                                  fontWeight:
+                                      doc.isExpired || doc.isExpiringSoon
+                                      ? FontWeight.w500
+                                      : FontWeight.normal,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
-              ),
-              const Icon(Icons.chevron_right, color: Colors.grey),
-            ],
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.chevron_right,
+                    color: Colors.grey,
+                    size: 20,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -564,6 +817,7 @@ class Doc {
   final IconData icon;
   final Color color;
   final bool isExpired;
+  final bool isExpiringSoon;
 
   Doc({
     required this.id,
@@ -574,6 +828,7 @@ class Doc {
     required this.icon,
     required this.color,
     required this.isExpired,
+    required this.isExpiringSoon,
   });
 
   factory Doc.fromJson(Map<String, dynamic> m) {
@@ -595,10 +850,16 @@ class Doc {
     }
 
     bool isExpired = false;
+    bool isExpiringSoon = false;
     if (m['expires_at'] != null) {
       try {
         final expireDate = DateFormat('yyyy-MM-dd').parse(m['expires_at']);
-        isExpired = expireDate.isBefore(DateTime.now());
+        final now = DateTime.now();
+        isExpired = expireDate.isBefore(now);
+        if (!isExpired) {
+          final daysUntilExpiration = expireDate.difference(now).inDays;
+          isExpiringSoon = daysUntilExpiration <= 30;
+        }
       } catch (_) {
         // Invalid date - ignore
       }
@@ -615,6 +876,7 @@ class Doc {
       icon: icon,
       color: color,
       isExpired: isExpired,
+      isExpiringSoon: isExpiringSoon,
     );
   }
 }
