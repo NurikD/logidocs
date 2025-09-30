@@ -6,6 +6,31 @@ import 'package:photo_view/photo_view.dart';
 import 'package:intl/intl.dart';
 import 'api.dart';
 
+// -------------------- simple in-memory LRU caches --------------------
+class _LruCache<K, V> {
+  final _map = <K, V>{};
+  final int capacity;
+  _LruCache({this.capacity = 32});
+  V? get(K k) {
+    final v = _map.remove(k);
+    if (v != null) _map[k] = v; // move to end (recent)
+    return v;
+  }
+  void put(K k, V v) {
+    if (_map.length >= capacity && !_map.containsKey(k)) {
+      _map.remove(_map.keys.first);
+    }
+    _map[k] = v;
+  }
+  void remove(K k) => _map.remove(k);
+  void clear() => _map.clear();
+}
+
+final _docsCache = _LruCache<String, List<Doc>>(capacity: 8);
+final _bytesCache = _LruCache<int, Uint8List>(capacity: 32);
+
+// --------------------------------------------------------------------
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Api.I.init();
@@ -194,11 +219,7 @@ class _LoginPageState extends State<LoginPage> {
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [
-                  Color(0xFF0066CC),
-                  Color(0xFF004A99),
-                  Color(0xFF003D7A),
-                ],
+                colors: [Color(0xFF0066CC), Color(0xFF004A99), Color(0xFF003D7A)],
               ),
             ),
           ),
@@ -225,29 +246,20 @@ class _LoginPageState extends State<LoginPage> {
                             ),
                           ],
                         ),
-                        child: const Icon(
-                          Icons.account_balance,
-                          size: 60,
-                          color: Color(0xFF0066CC),
-                        ),
+                        child: const Icon(Icons.account_balance, size: 60, color: Color(0xFF0066CC)),
                       ),
                       const SizedBox(height: 24),
                       const Text(
                         'LogiDocs',
                         style: TextStyle(
-                          fontSize: 32,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                          letterSpacing: -0.5,
+                          fontSize: 32, fontWeight: FontWeight.bold,
+                          color: Colors.white, letterSpacing: -0.5,
                         ),
                       ),
                       const SizedBox(height: 8),
                       Text(
                         'Электронный документооборот',
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: Colors.white.withOpacity(0.8),
-                        ),
+                        style: TextStyle(fontSize: 16, color: Colors.white70),
                       ),
                       const SizedBox(height: 48),
                       Container(
@@ -269,17 +281,15 @@ class _LoginPageState extends State<LoginPage> {
                             const Text(
                               'Вход в систему',
                               style: TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.w600,
-                                color: Color(0xFF333333),
+                                fontSize: 24, fontWeight: FontWeight.w600, color: Color(0xFF333333),
+                                letterSpacing: -0.5,
                               ),
                             ),
                             const SizedBox(height: 24),
                             TextField(
                               controller: _login,
                               decoration: const InputDecoration(
-                                labelText: 'Логин',
-                                hintText: 'Введите ваш логин',
+                                labelText: 'Логин', hintText: 'Введите ваш логин',
                                 prefixIcon: Icon(Icons.person_outline),
                               ),
                             ),
@@ -288,18 +298,11 @@ class _LoginPageState extends State<LoginPage> {
                               controller: _pass,
                               obscureText: _isObscured,
                               decoration: InputDecoration(
-                                labelText: 'Пароль',
-                                hintText: 'Введите пароль',
+                                labelText: 'Пароль', hintText: 'Введите пароль',
                                 prefixIcon: const Icon(Icons.lock_outline),
                                 suffixIcon: IconButton(
-                                  onPressed: () => setState(
-                                    () => _isObscured = !_isObscured,
-                                  ),
-                                  icon: Icon(
-                                    _isObscured
-                                        ? Icons.visibility
-                                        : Icons.visibility_off,
-                                  ),
+                                  onPressed: () => setState(() => _isObscured = !_isObscured),
+                                  icon: Icon(_isObscured ? Icons.visibility : Icons.visibility_off),
                                 ),
                               ),
                               onSubmitted: (_) => _submit(),
@@ -307,20 +310,15 @@ class _LoginPageState extends State<LoginPage> {
                             const SizedBox(height: 24),
                             ElevatedButton(
                               onPressed: _loading ? null : _submit,
-                              child: Text(
-                                _loading ? 'Вход...' : 'Войти в систему',
-                              ),
+                              child: Text(_loading ? 'Вход...' : 'Войти в систему'),
                             ),
                           ],
                         ),
                       ),
                       const SizedBox(height: 32),
-                      Text(
-                        'Техническая поддержка: 8-800-123-45-67',
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.7),
-                          fontSize: 12,
-                        ),
+                      const Text(
+                        'Техническая поддержка: +996-501-433-914',
+                        style: TextStyle(color: Colors.white70, fontSize: 12),
                       ),
                     ],
                   ),
@@ -352,14 +350,18 @@ class _DocumentsPageState extends State<DocumentsPage> {
   }
 
   Future<void> _load() async {
+    // 1) мгновенно показываем из кэша, если есть
+    final cached = _docsCache.get('my_docs');
+    if (cached != null && mounted) {
+      setState(() { _documents = cached; _loading = false; });
+    }
+    // 2) обновляем с сервера
     try {
       final rawList = await Api.I.getDocuments();
       final list = rawList.map((m) => Doc.fromJson(m)).toList();
       if (!mounted) return;
-      setState(() {
-        _documents = list;
-        _loading = false;
-      });
+      setState(() { _documents = list; _loading = false; });
+      _docsCache.put('my_docs', list);
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
@@ -377,9 +379,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg),
-        backgroundColor: isError
-            ? Colors.red.withOpacity(0.9)
-            : const Color(0xFF4CAF50),
+        backgroundColor: isError ? Colors.red.withOpacity(0.9) : const Color(0xFF4CAF50),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
@@ -389,199 +389,130 @@ class _DocumentsPageState extends State<DocumentsPage> {
   @override
   Widget build(BuildContext context) {
     final expiredDocs = _documents.where((doc) => doc.isExpired).length;
-    final expiringSoon = _documents
-        .where((doc) => doc.isExpiringSoon && !doc.isExpired)
-        .length;
+    final expiringSoon = _documents.where((doc) => doc.isExpiringSoon && !doc.isExpired).length;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
-      body: CustomScrollView(
-        slivers: [
-          SliverAppBar(
-            expandedHeight: 200,
-            floating: false,
-            pinned: true,
-            backgroundColor: const Color(0xFF0066CC),
-            flexibleSpace: FlexibleSpaceBar(
-              title: const Text(
-                'Мои документы',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              background: Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      Color(0xFF0066CC),
-                      Color(0xFF004A99),
-                      Color(0xFF003D7A),
+      body: RefreshIndicator(
+        onRefresh: _refresh,
+        child: CustomScrollView(
+          slivers: [
+            SliverAppBar(
+              expandedHeight: 200,
+              floating: false,
+              pinned: true,
+              backgroundColor: const Color(0xFF0066CC),
+              flexibleSpace: FlexibleSpaceBar(
+                title: const Text('Мои документы', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                background: Container(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft, end: Alignment.bottomRight,
+                      colors: [Color(0xFF0066CC), Color(0xFF004A99), Color(0xFF003D7A)],
+                    ),
+                  ),
+                  child: Stack(
+                    children: [
+                      Positioned(
+                        right: -50, top: -50,
+                        child: Container(
+                          width: 200, height: 200,
+                          decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white10),
+                        ),
+                      ),
+                      const Positioned(
+                        right: 20, top: 100,
+                        child: Icon(Icons.folder_open, size: 80, color: Colors.white24),
+                      ),
                     ],
                   ),
                 ),
-                child: Stack(
-                  children: [
-                    Positioned(
-                      right: -50,
-                      top: -50,
-                      child: Container(
-                        width: 200,
-                        height: 200,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white.withOpacity(0.1),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      right: 20,
-                      top: 100,
-                      child: Icon(
-                        Icons.folder_open,
-                        size: 80,
-                        color: Colors.white.withOpacity(0.2),
-                      ),
-                    ),
-                  ],
+              ),
+              actions: [
+                IconButton(
+                  tooltip: 'Обновить', onPressed: _refresh,
+                  icon: const Icon(Icons.refresh, color: Colors.white),
                 ),
-              ),
+                IconButton(
+                  tooltip: 'Выход',
+                  onPressed: () async {
+                    await Api.I.logout();
+                    if (!mounted) return;
+                    Navigator.pushAndRemoveUntil(
+                      context,
+                      MaterialPageRoute(builder: (_) => const LoginPage()),
+                      (route) => false,
+                    );
+                  },
+                  icon: const Icon(Icons.logout, color: Colors.white),
+                ),
+              ],
             ),
-            actions: [
-              IconButton(
-                tooltip: 'Обновить',
-                onPressed: _refresh,
-                icon: const Icon(Icons.refresh, color: Colors.white),
-              ),
-              IconButton(
-                tooltip: 'Выход',
-                onPressed: () async {
-                  await Api.I.logout();
-                  if (!mounted) return;
-                  Navigator.pushAndRemoveUntil(
-                    context,
-                    MaterialPageRoute(builder: (_) => const LoginPage()),
-                    (route) => false,
-                  );
-                },
-                icon: const Icon(Icons.logout, color: Colors.white),
-              ),
-            ],
-          ),
-          if (!_loading)
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  children: [
-                    // // Статистика
-                    // _StatsCard(
-                    //   totalDocs: _documents.length,
-                    //   expiredDocs: expiredDocs,
-                    //   expiringSoon: expiringSoon,
-                    // ),
-                    const SizedBox(height: 20),
-                    // Заголовок секции
-                    Row(
-                      children: [
-                        const Icon(Icons.description, color: Color(0xFF0066CC)),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'Документы',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF333333),
-                          ),
-                        ),
-                        const Spacer(),
-                        if (_documents.isNotEmpty)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF0066CC).withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Text(
-                              '${_documents.length}',
-                              style: const TextStyle(
-                                color: Color(0xFF0066CC),
-                                fontWeight: FontWeight.w600,
+            if (!_loading)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 20),
+                      Row(
+                        children: [
+                          const Icon(Icons.description, color: Color(0xFF0066CC)),
+                          const SizedBox(width: 8),
+                          const Text('Документы', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: Color(0xFF333333))),
+                          const Spacer(),
+                          if (_documents.isNotEmpty)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF0066CC).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(20),
                               ),
+                              child: Text('${_documents.length}', style: const TextStyle(color: Color(0xFF0066CC), fontWeight: FontWeight.w600)),
                             ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                  ],
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          if (_loading)
-            const SliverFillRemaining(
-              child: Center(child: CircularProgressIndicator()),
-            )
-          else if (_documents.isEmpty)
-            SliverFillRemaining(
-              child: Container(
-                padding: const EdgeInsets.all(40),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Container(
-                      width: 120,
-                      height: 120,
-                      decoration: BoxDecoration(
-                        color: Colors.grey.withOpacity(0.1),
-                        shape: BoxShape.circle,
+            if (_loading)
+              const SliverFillRemaining(child: Center(child: CircularProgressIndicator()))
+            else if (_documents.isEmpty)
+              SliverFillRemaining(
+                child: Container(
+                  padding: const EdgeInsets.all(40),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 120, height: 120,
+                        decoration: BoxDecoration(color: Colors.grey.withOpacity(0.1), shape: BoxShape.circle),
+                        child: Icon(Icons.folder_open, size: 60, color: Colors.grey.withOpacity(0.4)),
                       ),
-                      child: Icon(
-                        Icons.folder_open,
-                        size: 60,
-                        color: Colors.grey.withOpacity(0.4),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    Text(
-                      'Документы не найдены',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey.withOpacity(0.6),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Документы появятся здесь автоматически',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey.withOpacity(0.5),
-                      ),
-                    ),
-                  ],
+                      const SizedBox(height: 24),
+                      Text('Документы не найдены', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: Colors.grey.withOpacity(0.6))),
+                      const SizedBox(height: 8),
+                      Text('Документы появятся здесь автоматически', style: TextStyle(fontSize: 14, color: Colors.grey.withOpacity(0.5))),
+                    ],
+                  ),
+                ),
+              )
+            else
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                sliver: SliverList(
+                  delegate: SliverChildBuilderDelegate((context, index) {
+                    return Padding(
+                      padding: EdgeInsets.only(bottom: index == _documents.length - 1 ? 20 : 12),
+                      child: DocumentCard(doc: _documents[index]),
+                    );
+                  }, childCount: _documents.length),
                 ),
               ),
-            )
-          else
-            SliverPadding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              sliver: SliverList(
-                delegate: SliverChildBuilderDelegate((context, index) {
-                  return Padding(
-                    padding: EdgeInsets.only(
-                      bottom: index == _documents.length - 1 ? 20 : 12,
-                    ),
-                    child: DocumentCard(doc: _documents[index]),
-                  );
-                }, childCount: _documents.length),
-              ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -606,23 +537,12 @@ class _StatItem extends StatelessWidget {
     return Column(
       children: [
         Container(
-          width: 50,
-          height: 50,
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(12),
-          ),
+          width: 50, height: 50,
+          decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
           child: Icon(icon, color: color, size: 24),
         ),
         const SizedBox(height: 8),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
-        ),
+        Text(value, style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: color)),
         Text(title, style: const TextStyle(fontSize: 12, color: Colors.grey)),
       ],
     );
@@ -638,8 +558,8 @@ class DocumentCard extends StatelessWidget {
     final expiredColor = doc.isExpired
         ? Colors.red
         : doc.isExpiringSoon
-        ? Colors.orange
-        : Colors.grey.withOpacity(0.7);
+            ? Colors.orange
+            : Colors.grey.withOpacity(0.7);
 
     return Container(
       decoration: BoxDecoration(
@@ -648,14 +568,10 @@ class DocumentCard extends StatelessWidget {
         border: doc.isExpired
             ? Border.all(color: Colors.red.withOpacity(0.5), width: 2)
             : doc.isExpiringSoon
-            ? Border.all(color: Colors.orange.withOpacity(0.5), width: 1)
-            : null,
+                ? Border.all(color: Colors.orange.withOpacity(0.5), width: 1)
+                : null,
         boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
+          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 2)),
         ],
       ),
       child: Material(
@@ -665,10 +581,7 @@ class DocumentCard extends StatelessWidget {
           onTap: () {
             Navigator.push(
               context,
-              MaterialPageRoute(
-                builder: (_) =>
-                    DocumentViewerPage(docId: doc.id, title: doc.title),
-              ),
+              MaterialPageRoute(builder: (_) => DocumentViewerPage(docId: doc.id, title: doc.title)),
             );
           },
           child: Padding(
@@ -676,22 +589,14 @@ class DocumentCard extends StatelessWidget {
             child: Row(
               children: [
                 Container(
-                  width: 56,
-                  height: 56,
+                  width: 56, height: 56,
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
+                      begin: Alignment.topLeft, end: Alignment.bottomRight,
                       colors: [doc.color, doc.color.withOpacity(0.7)],
                     ),
                     borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: doc.color.withOpacity(0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
+                    boxShadow: [BoxShadow(color: doc.color.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 2))],
                   ),
                   child: Icon(doc.icon, color: Colors.white, size: 28),
                 ),
@@ -700,26 +605,13 @@ class DocumentCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        doc.title,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF333333),
-                        ),
-                      ),
+                      Text(doc.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFF333333))),
                       const SizedBox(height: 8),
                       Row(
                         children: [
-                          _Chip(
-                            text: doc.type ?? 'Документ',
-                            color: Colors.grey,
-                          ),
+                          _Chip(text: doc.type ?? 'Документ', color: Colors.grey),
                           const SizedBox(width: 8),
-                          _Chip(
-                            text: 'v${doc.version ?? '-'}',
-                            color: const Color(0xFF0066CC),
-                          ),
+                          _Chip(text: 'v${doc.version ?? '-'}', color: const Color(0xFF0066CC)),
                         ],
                       ),
                       if (doc.expiresAt != null) ...[
@@ -727,29 +619,18 @@ class DocumentCard extends StatelessWidget {
                         Row(
                           children: [
                             Icon(
-                              doc.isExpired
-                                  ? Icons.error
-                                  : doc.isExpiringSoon
-                                  ? Icons.warning
-                                  : Icons.schedule,
-                              size: 16,
-                              color: expiredColor,
+                              doc.isExpired ? Icons.error : (doc.isExpiringSoon ? Icons.warning : Icons.schedule),
+                              size: 16, color: expiredColor,
                             ),
                             const SizedBox(width: 4),
                             Expanded(
                               child: Text(
                                 doc.isExpired
                                     ? 'Просрочен ${doc.expiresAt}'
-                                    : doc.isExpiringSoon
-                                    ? 'Истекает ${doc.expiresAt}'
-                                    : 'до ${doc.expiresAt}',
+                                    : (doc.isExpiringSoon ? 'Истекает ${doc.expiresAt}' : 'до ${doc.expiresAt}'),
                                 style: TextStyle(
-                                  fontSize: 12,
-                                  color: expiredColor,
-                                  fontWeight:
-                                      doc.isExpired || doc.isExpiringSoon
-                                      ? FontWeight.w500
-                                      : FontWeight.normal,
+                                  fontSize: 12, color: expiredColor,
+                                  fontWeight: (doc.isExpired || doc.isExpiringSoon) ? FontWeight.w500 : FontWeight.normal,
                                 ),
                               ),
                             ),
@@ -760,17 +641,9 @@ class DocumentCard extends StatelessWidget {
                   ),
                 ),
                 Container(
-                  width: 32,
-                  height: 32,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(
-                    Icons.chevron_right,
-                    color: Colors.grey,
-                    size: 20,
-                  ),
+                  width: 32, height: 32,
+                  decoration: BoxDecoration(color: Colors.grey.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+                  child: const Icon(Icons.chevron_right, color: Colors.grey, size: 20),
                 ),
               ],
             ),
@@ -782,8 +655,7 @@ class DocumentCard extends StatelessWidget {
 }
 
 class _Chip extends StatelessWidget {
-  const _Chip({Key? key, required this.text, required this.color})
-    : super(key: key);
+  const _Chip({Key? key, required this.text, required this.color}) : super(key: key);
   final String text;
   final Color color;
 
@@ -796,14 +668,7 @@ class _Chip extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: color.withOpacity(0.3)),
       ),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w500,
-          color: color,
-        ),
-      ),
+      child: Text(text, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: color)),
     );
   }
 }
@@ -836,17 +701,13 @@ class Doc {
     IconData icon = Icons.description;
     Color color = const Color(0xFF0066CC);
     if (t.contains('лиценз')) {
-      icon = Icons.verified_user;
-      color = const Color(0xFF4CAF50);
+      icon = Icons.verified_user; color = const Color(0xFF4CAF50);
     } else if (t.contains('разреш')) {
-      icon = Icons.route;
-      color = const Color(0xFF2196F3);
+      icon = Icons.route; color = const Color(0xFF2196F3);
     } else if (t.contains('полис')) {
-      icon = Icons.security;
-      color = const Color(0xFFFF9800);
+      icon = Icons.security; color = const Color(0xFFFF9800);
     } else if (t.contains('сертифик')) {
-      icon = Icons.assignment_turned_in;
-      color = const Color(0xFF7E57C2);
+      icon = Icons.assignment_turned_in; color = const Color(0xFF7E57C2);
     }
 
     bool isExpired = false;
@@ -860,18 +721,14 @@ class Doc {
           final daysUntilExpiration = expireDate.difference(now).inDays;
           isExpiringSoon = daysUntilExpiration <= 30;
         }
-      } catch (_) {
-        // Invalid date - ignore
-      }
+      } catch (_) {}
     }
 
     return Doc(
       id: m['id'] as int,
       title: (m['title'] ?? '').toString(),
       type: m['type']?.toString(),
-      version: m['version'] is int
-          ? m['version'] as int
-          : int.tryParse('${m['version']}'),
+      version: m['version'] is int ? m['version'] as int : int.tryParse('${m['version']}'),
       expiresAt: m['expires_at']?.toString(),
       icon: icon,
       color: color,
@@ -882,8 +739,7 @@ class Doc {
 }
 
 class DocumentViewerPage extends StatefulWidget {
-  const DocumentViewerPage({Key? key, required this.docId, required this.title})
-    : super(key: key);
+  const DocumentViewerPage({Key? key, required this.docId, required this.title}) : super(key: key);
   final int docId;
   final String title;
 
@@ -896,6 +752,7 @@ class _DocumentViewerPageState extends State<DocumentViewerPage> {
   String? _fileType; // 'pdf', 'image', null if error
   String? _error;
   bool _isLoading = true;
+  PdfController? _pdf;
 
   @override
   void initState() {
@@ -903,37 +760,64 @@ class _DocumentViewerPageState extends State<DocumentViewerPage> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _pdf?.dispose();
+    super.dispose();
+  }
+
   Future<void> _load() async {
     setState(() => _isLoading = true);
     try {
+      final cached = _bytesCache.get(widget.docId);
+      if (cached != null) {
+        final ft = _detectFileType(cached);
+        _setupPdfIfNeeded(ft, cached);
+        if (!mounted) return;
+        setState(() { _bytes = cached; _fileType = ft; _isLoading = false; });
+        _refreshInBackground();
+        return;
+      }
+
       final bytes = await Api.I.fetchDocumentBytes(widget.docId);
-      final fileType = _detectFileType(bytes);
+      final ft = _detectFileType(bytes);
+      _bytesCache.put(widget.docId, bytes);
+      _setupPdfIfNeeded(ft, bytes);
       if (!mounted) return;
-      setState(() {
-        _bytes = bytes;
-        _fileType = fileType;
-        _isLoading = false;
-      });
+      setState(() { _bytes = bytes; _fileType = ft; _isLoading = false; });
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _error = 'Ошибка загрузки: $e';
-        _isLoading = false;
-      });
+      setState(() { _error = 'Ошибка загрузки: $e'; _isLoading = false; });
+    }
+  }
+
+  Future<void> _refreshInBackground() async {
+    try {
+      final fresh = await Api.I.fetchDocumentBytes(widget.docId);
+      if (_bytes == null || fresh.lengthInBytes != _bytes!.lengthInBytes) {
+        _bytesCache.put(widget.docId, fresh);
+        final ft = _detectFileType(fresh);
+        _setupPdfIfNeeded(ft, fresh);
+        if (!mounted) return;
+        setState(() { _bytes = fresh; _fileType = ft; });
+      }
+    } catch (_) {}
+  }
+
+  void _setupPdfIfNeeded(String? ft, Uint8List data) {
+    if (ft == 'pdf') {
+      _pdf?.dispose();
+      _pdf = PdfController(document: PdfDocument.openData(data));
     }
   }
 
   String? _detectFileType(Uint8List bytes) {
     if (bytes.length < 4) return null;
-    final header = String.fromCharCodes(bytes.sublist(0, 4));
-    if (header == '%PDF') return 'pdf';
-    if (bytes[0] == 0xFF && bytes[1] == 0xD8) return 'image'; // JPEG
-    if (bytes[0] == 0x89 &&
-        bytes[1] == 0x50 &&
-        bytes[2] == 0x4E &&
-        bytes[3] == 0x47)
-      return 'image'; // PNG
-    return null; // Unknown
+    final b0 = bytes[0], b1 = bytes[1], b2 = bytes[2], b3 = bytes[3];
+    if (b0 == 0x25 && b1 == 0x50 && b2 == 0x44 && b3 == 0x46) return 'pdf';  // %PDF
+    if (b0 == 0xFF && b1 == 0xD8) return 'image'; // JPEG
+    if (b0 == 0x89 && b1 == 0x50 && b2 == 0x4E && b3 == 0x47) return 'image'; // PNG
+    return null;
   }
 
   @override
@@ -943,20 +827,14 @@ class _DocumentViewerPageState extends State<DocumentViewerPage> {
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-          ? Center(
-              child: Text(_error!, style: const TextStyle(color: Colors.red)),
-            )
-          : _bytes == null
-          ? const Center(child: Text('Ошибка загрузки документа'))
-          : _fileType == 'pdf'
-          ? PdfView(
-              controller: PdfController(
-                document: PdfDocument.openData(_bytes!),
-              ),
-            )
-          : _fileType == 'image'
-          ? PhotoView(imageProvider: MemoryImage(_bytes!))
-          : const Center(child: Text('Неподдерживаемый формат')),
+              ? Center(child: Text(_error!, style: const TextStyle(color: Colors.red)))
+              : _bytes == null
+                  ? const Center(child: Text('Ошибка загрузки документа'))
+                  : _fileType == 'pdf'
+                      ? PdfView(controller: _pdf!)
+                      : _fileType == 'image'
+                          ? PhotoView(imageProvider: MemoryImage(_bytes!))
+                          : const Center(child: Text('Неподдерживаемый формат')),
     );
   }
 }
