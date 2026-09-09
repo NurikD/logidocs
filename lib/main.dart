@@ -285,7 +285,6 @@ class _LoginPageState extends State<LoginPage> {
       body: SafeArea(
         child: Column(
           children: [
-            Container(height: 3, width: double.infinity, color: kAccent),
             Expanded(
               child: Center(
                 child: SingleChildScrollView(
