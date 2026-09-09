@@ -328,28 +328,191 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  Future<List<Vehicle>>? _future;
+  Future<_HomeData>? _future;
 
   @override
   void initState() {
     super.initState();
     _future = () async {
+      if (await Api.I.isSuperUser()) {
+        return const _HomeData.dispatcher();
+      }
       final raw = await Api.I.getVehicles();
-      return raw.map((m) => Vehicle.fromJson(m)).toList();
+      final vehicles = raw.map((m) => Vehicle.fromJson(m)).toList();
+      return _HomeData.client(vehicles);
     }();
   }
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<List<Vehicle>>(
+    return FutureBuilder<_HomeData>(
       future: _future,
       builder: (context, snap) {
         if (!snap.hasData && !snap.hasError) {
           return const Scaffold(body: Center(child: CircularProgressIndicator()));
         }
-        final vehicles = snap.data ?? [];
-        return vehicles.isEmpty ? const DocumentsPage() : VehiclesPage(vehicles: vehicles);
+        final data = snap.data ?? const _HomeData.client([]);
+        if (data.isDispatcher) return const DispatcherHomePage();
+        return data.vehicles.isEmpty ? const DocumentsPage() : VehiclesPage(vehicles: data.vehicles);
       },
+    );
+  }
+}
+
+class _HomeData {
+  final bool isDispatcher;
+  final List<Vehicle> vehicles;
+  const _HomeData.client(this.vehicles) : isDispatcher = false;
+  const _HomeData.dispatcher() : isDispatcher = true, vehicles = const [];
+}
+
+/// Экран диспетчера (superuser): все клиенты, у которых путёвка скоро истечёт
+/// или уже истекла — вместо обычного списка документов.
+class DispatcherHomePage extends StatefulWidget {
+  const DispatcherHomePage({Key? key}) : super(key: key);
+
+  @override
+  State<DispatcherHomePage> createState() => _DispatcherHomePageState();
+}
+
+class _DispatcherHomePageState extends State<DispatcherHomePage> {
+  List<Map<String, dynamic>> _items = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      final items = await Api.I.getExpiringDocuments();
+      if (!mounted) return;
+      setState(() { _items = items; _loading = false; });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _error = 'Ошибка загрузки: $e'; _loading = false; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        titleSpacing: 20,
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.description_outlined, size: 18, color: kAccent),
+            SizedBox(width: 10),
+            Text('LogiDocs'),
+          ],
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Обновить', onPressed: _load,
+            icon: const Icon(Icons.refresh, color: kInkMuted),
+          ),
+          IconButton(
+            tooltip: 'Выход',
+            onPressed: () async {
+              await Api.I.logout();
+              if (!context.mounted) return;
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginPage()),
+                (route) => false,
+              );
+            },
+            icon: const Icon(Icons.logout, color: kInkMuted),
+          ),
+        ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(height: 1, color: kLine),
+        ),
+      ),
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+                ? Center(child: Text(_error!, style: const TextStyle(color: kStatusExpired)))
+                : _items.isEmpty
+                    ? ListView(
+                        padding: const EdgeInsets.all(40),
+                        children: [
+                          const SizedBox(height: 80),
+                          const Icon(Icons.check_circle_outline, size: 56, color: kStatusValid),
+                          const SizedBox(height: 24),
+                          const Center(child: Text('Ничего срочного', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: kInk))),
+                          const SizedBox(height: 8),
+                          const Center(child: Text('Нет путёвок, которые истекли или истекают в ближайшую неделю', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: kInkMuted))),
+                        ],
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+                        itemCount: _items.length,
+                        itemBuilder: (context, index) => ExpiringClientRow(item: _items[index]),
+                      ),
+      ),
+    );
+  }
+}
+
+class ExpiringClientRow extends StatelessWidget {
+  const ExpiringClientRow({Key? key, required this.item}) : super(key: key);
+  final Map<String, dynamic> item;
+
+  @override
+  Widget build(BuildContext context) {
+    final isExpired = item['is_expired'] == true;
+    final ownerName = (item['owner_name'] as String?)?.trim();
+    final username = (item['owner_username'] ?? '').toString();
+    final phone = (item['owner_phone'] as String?)?.trim();
+    final plate = item['vehicle_plate']?.toString();
+    final title = (item['title'] ?? '').toString();
+    final expiresAt = item['expires_at']?.toString() ?? '';
+
+    return Container(
+      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: kLine))),
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 7, height: 7,
+            margin: const EdgeInsets.only(top: 6),
+            decoration: BoxDecoration(color: isExpired ? kStatusExpired : kStatusSoon, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  (ownerName?.isNotEmpty ?? false) ? '$ownerName ($username)' : username,
+                  style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600, color: kInk),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  [title, if (plate != null) 'авто $plate', if (phone != null && phone.isNotEmpty) phone].join(' · '),
+                  style: const TextStyle(fontSize: 12, color: kInkMuted),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            isExpired ? 'Просрочена $expiresAt' : 'До $expiresAt',
+            style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w500, color: isExpired ? kStatusExpired : kStatusSoon),
+          ),
+        ],
+      ),
     );
   }
 }

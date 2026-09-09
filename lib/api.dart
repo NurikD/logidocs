@@ -96,8 +96,15 @@ class Api {
     }
     await _storage.write(key: 'access', value: access);
     await _storage.write(key: 'refresh', value: refresh);
+    await _storage.write(key: 'is_superuser', value: data['is_superuser'] == true ? '1' : '0');
     dio.options.headers['Authorization'] = 'Bearer $access';
     return data;
+  }
+
+  /// Диспетчер логинится тем же admin-аккаунтом — по этому флагу приложение
+  /// показывает ему экран истекающих путёвок вместо своих документов.
+  Future<bool> isSuperUser() async {
+    return (await _storage.read(key: 'is_superuser')) == '1';
   }
 
   Future<void> changePassword(String oldPw, String newPw) async {
@@ -143,6 +150,22 @@ class Api {
   Future<void> dismissNotification(int docId) async {
     await _ensureAuthHeader();
     await dio.post('/api/documents/$docId/dismiss-notification/');
+  }
+
+  /// Экран диспетчера: путёвки всех клиентов, которые скоро истекут или истекли.
+  Future<List<Map<String, dynamic>>> getExpiringDocuments() async {
+    await _ensureAuthHeader();
+    final res = await dio.get('/api/documents/expiring/');
+    final list = (res.data as List)
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+    return list;
+  }
+
+  /// Регистрация FCM-токена устройства за текущим пользователем.
+  Future<void> registerDeviceToken(String token, String platform) async {
+    await _ensureAuthHeader();
+    await dio.post('/api/devices/register/', data: {'token': token, 'platform': platform});
   }
 
   /// ----- Загрузка/открытие файла -----
