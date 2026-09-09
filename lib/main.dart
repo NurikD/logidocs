@@ -39,7 +39,7 @@ class _LruCache<K, V> {
 }
 
 final _docsCache = _LruCache<String, List<Doc>>(capacity: 8);
-final _bytesCache = _LruCache<int, Uint8List>(capacity: 32);
+final _bytesCache = _LruCache<String, Uint8List>(capacity: 32);
 
 // --------------------------------------------------------------------
 
@@ -153,7 +153,7 @@ class _AuthGateState extends State<AuthGate> {
             body: Center(child: CircularProgressIndicator()),
           );
         }
-        return snap.data! ? const DocumentsPage() : const LoginPage();
+        return snap.data! ? const HomePage() : const LoginPage();
       },
     );
   }
@@ -194,7 +194,7 @@ class _LoginPageState extends State<LoginPage> {
         _toast('Пожалуйста, смените пароль');
       } else {
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const DocumentsPage()),
+          MaterialPageRoute(builder: (_) => const HomePage()),
         );
       }
     } on DioException catch (e) {
@@ -318,8 +318,148 @@ class _LoginPageState extends State<LoginPage> {
   }
 }
 
+/// Решает, что показать сразу после входа: если у клиента одна машина
+/// (или ни одной, для документов "как раньше") — список документов;
+/// если несколько — список папок-автомобилей.
+class HomePage extends StatefulWidget {
+  const HomePage({Key? key}) : super(key: key);
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  Future<List<Vehicle>>? _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = () async {
+      final raw = await Api.I.getVehicles();
+      return raw.map((m) => Vehicle.fromJson(m)).toList();
+    }();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<Vehicle>>(
+      future: _future,
+      builder: (context, snap) {
+        if (!snap.hasData && !snap.hasError) {
+          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+        }
+        final vehicles = snap.data ?? [];
+        return vehicles.isEmpty ? const DocumentsPage() : VehiclesPage(vehicles: vehicles);
+      },
+    );
+  }
+}
+
+class VehiclesPage extends StatelessWidget {
+  const VehiclesPage({Key? key, required this.vehicles}) : super(key: key);
+  final List<Vehicle> vehicles;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        titleSpacing: 20,
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.description_outlined, size: 18, color: kAccent),
+            SizedBox(width: 10),
+            Text('LogiDocs'),
+          ],
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Выход',
+            onPressed: () async {
+              await Api.I.logout();
+              if (!context.mounted) return;
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginPage()),
+                (route) => false,
+              );
+            },
+            icon: const Icon(Icons.logout, color: kInkMuted),
+          ),
+        ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(height: 1, color: kLine),
+        ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+        children: [
+          const Text('Мои автомобили', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: kInk)),
+          const SizedBox(height: 12),
+          for (final v in vehicles) VehicleRow(vehicle: v),
+        ],
+      ),
+    );
+  }
+}
+
+class VehicleRow extends StatelessWidget {
+  const VehicleRow({Key? key, required this.vehicle}) : super(key: key);
+  final Vehicle vehicle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: kLine)),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => DocumentsPage(vehicle: vehicle)),
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Row(
+              children: [
+                Container(
+                  width: 40, height: 40,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: kLine),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Icon(Icons.local_shipping_outlined, color: kAccent, size: 19),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    vehicle.plate,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500, color: kInk),
+                  ),
+                ),
+                Text('${vehicle.documentsCount} документов', style: const TextStyle(fontSize: 12, color: kInkMuted)),
+                const SizedBox(width: 8),
+                const Icon(Icons.chevron_right, color: kChevron, size: 15),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class DocumentsPage extends StatefulWidget {
-  const DocumentsPage({Key? key}) : super(key: key);
+  const DocumentsPage({Key? key, this.vehicle}) : super(key: key);
+  final Vehicle? vehicle;
 
   @override
   State<DocumentsPage> createState() => _DocumentsPageState();
@@ -335,19 +475,21 @@ class _DocumentsPageState extends State<DocumentsPage> {
     _load();
   }
 
+  String get _cacheKey => widget.vehicle != null ? 'vehicle_${widget.vehicle!.id}_docs' : 'my_docs';
+
   Future<void> _load() async {
     // 1) мгновенно показываем из кэша, если есть
-    final cached = _docsCache.get('my_docs');
+    final cached = _docsCache.get(_cacheKey);
     if (cached != null && mounted) {
       setState(() { _documents = cached; _loading = false; });
     }
     // 2) обновляем с сервера
     try {
-      final rawList = await Api.I.getDocuments();
+      final rawList = await Api.I.getDocuments(vehicleId: widget.vehicle?.id);
       final list = rawList.map((m) => Doc.fromJson(m)).toList();
       if (!mounted) return;
       setState(() { _documents = list; _loading = false; });
-      _docsCache.put('my_docs', list);
+      _docsCache.put(_cacheKey, list);
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
@@ -421,7 +563,10 @@ class _DocumentsPageState extends State<DocumentsPage> {
                   crossAxisAlignment: CrossAxisAlignment.baseline,
                   textBaseline: TextBaseline.alphabetic,
                   children: [
-                    const Text('Мои документы', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: kInk)),
+                    Text(
+                      widget.vehicle?.plate ?? 'Мои документы',
+                      style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: kInk),
+                    ),
                     const Spacer(),
                     Text('${_documents.length} документа', style: const TextStyle(fontSize: 12, color: kInkMuted)),
                   ],
@@ -495,17 +640,32 @@ class DocumentRow extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => DocumentViewerPage(
-                  docId: doc.id,
-                  title: doc.title,
-                  kindLabel: doc.kindLabel,
-                  expiresAt: doc.expiresAt,
+            if (doc.files.isEmpty) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('К документу не прикреплён файл')),
+              );
+              return;
+            }
+            if (doc.files.length == 1) {
+              final f = doc.files.first;
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => DocumentViewerPage(
+                    docId: doc.id,
+                    fileId: f.id,
+                    title: doc.title,
+                    kindLabel: doc.kindLabel,
+                    expiresAt: doc.expiresAt,
+                  ),
                 ),
-              ),
-            );
+              );
+            } else {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => DocumentFilesPage(doc: doc)),
+              );
+            }
           },
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -569,6 +729,40 @@ class DocumentRow extends StatelessWidget {
   }
 }
 
+class DocFile {
+  final int id;
+  final String fileName;
+  final String? contentType;
+  final int? size;
+
+  DocFile({required this.id, required this.fileName, this.contentType, this.size});
+
+  factory DocFile.fromJson(Map<String, dynamic> m) {
+    return DocFile(
+      id: m['id'] as int,
+      fileName: (m['file_name'] ?? 'файл').toString(),
+      contentType: m['content_type']?.toString(),
+      size: m['size'] is int ? m['size'] as int : int.tryParse('${m['size']}'),
+    );
+  }
+}
+
+class Vehicle {
+  final int id;
+  final String plate;
+  final int documentsCount;
+
+  Vehicle({required this.id, required this.plate, required this.documentsCount});
+
+  factory Vehicle.fromJson(Map<String, dynamic> m) {
+    return Vehicle(
+      id: m['id'] as int,
+      plate: (m['plate'] ?? '').toString(),
+      documentsCount: m['documents_count'] is int ? m['documents_count'] as int : int.tryParse('${m['documents_count']}') ?? 0,
+    );
+  }
+}
+
 class Doc {
   final int id;
   final String title;
@@ -578,6 +772,10 @@ class Doc {
   final IconData icon;
   final bool isExpired;
   final bool isExpiringSoon;
+  final List<DocFile> files;
+  // null — документ висит прямо на пользователе (клиент с одной машиной)
+  final int? vehicleId;
+  final String? vehiclePlate;
 
   Doc({
     required this.id,
@@ -588,18 +786,17 @@ class Doc {
     required this.icon,
     required this.isExpired,
     required this.isExpiringSoon,
+    required this.files,
+    this.vehicleId,
+    this.vehiclePlate,
   });
 
   static ({IconData icon, String label}) _kindMeta(String? kind) {
     switch ((kind ?? '').toLowerCase()) {
-      case 'license':
-        return (icon: Icons.verified_user, label: 'ЛИЦЕНЗИЯ');
-      case 'permit':
-        return (icon: Icons.route, label: 'РАЗРЕШЕНИЕ');
-      case 'policy':
-        return (icon: Icons.security, label: 'ПОЛИС');
-      case 'cert':
-        return (icon: Icons.assignment_turned_in, label: 'СЕРТИФИКАТ');
+      case 'business':
+        return (icon: Icons.assignment_outlined, label: 'ПУТЕВКА');
+      case 'dozvol':
+        return (icon: Icons.verified_outlined, label: 'ДОЗВОЛ');
       default:
         return (icon: Icons.description, label: 'ДОКУМЕНТ');
     }
@@ -623,6 +820,10 @@ class Doc {
       } catch (_) {}
     }
 
+    final files = (m['files'] as List? ?? [])
+        .map((e) => DocFile.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
+
     return Doc(
       id: m['id'] as int,
       title: (m['title'] ?? '').toString(),
@@ -632,6 +833,102 @@ class Doc {
       icon: meta.icon,
       isExpired: isExpired,
       isExpiringSoon: isExpiringSoon,
+      files: files,
+      vehicleId: m['vehicle_id'] as int?,
+      vehiclePlate: m['vehicle_plate']?.toString(),
+    );
+  }
+}
+
+String _formatFileSize(int? bytes) {
+  if (bytes == null) return '';
+  if (bytes < 1024) return '$bytes Б';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} КБ';
+  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} МБ';
+}
+
+IconData _fileIcon(DocFile f) {
+  final ct = (f.contentType ?? '').toLowerCase();
+  if (ct.contains('pdf')) return Icons.picture_as_pdf_outlined;
+  if (ct.startsWith('image/')) return Icons.image_outlined;
+  return Icons.insert_drive_file_outlined;
+}
+
+class DocumentFilesPage extends StatelessWidget {
+  const DocumentFilesPage({Key? key, required this.doc}) : super(key: key);
+  final Doc doc;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        title: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(doc.title, maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500, color: kInk)),
+            Text('${doc.files.length} файла', style: const TextStyle(fontSize: 11, color: kInkMuted)),
+          ],
+        ),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(height: 1, color: kLine),
+        ),
+      ),
+      body: ListView.builder(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        itemCount: doc.files.length,
+        itemBuilder: (context, index) {
+          final f = doc.files[index];
+          return Container(
+            decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: kLine))),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => DocumentViewerPage(
+                        docId: doc.id,
+                        fileId: f.id,
+                        title: doc.title,
+                        kindLabel: doc.kindLabel,
+                        expiresAt: doc.expiresAt,
+                      ),
+                    ),
+                  );
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  child: Row(
+                    children: [
+                      Icon(_fileIcon(f), color: kAccent, size: 22),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Text(
+                          f.fileName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 14, color: kInk),
+                        ),
+                      ),
+                      if (f.size != null) ...[
+                        const SizedBox(width: 8),
+                        Text(_formatFileSize(f.size), style: const TextStyle(fontSize: 12, color: kInkMuted)),
+                      ],
+                      const SizedBox(width: 8),
+                      const Icon(Icons.chevron_right, color: kChevron, size: 15),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 }
@@ -640,11 +937,13 @@ class DocumentViewerPage extends StatefulWidget {
   const DocumentViewerPage({
     Key? key,
     required this.docId,
+    required this.fileId,
     required this.title,
     this.kindLabel,
     this.expiresAt,
   }) : super(key: key);
   final int docId;
+  final int fileId;
   final String title;
   final String? kindLabel;
   final String? expiresAt;
@@ -672,10 +971,12 @@ class _DocumentViewerPageState extends State<DocumentViewerPage> {
     super.dispose();
   }
 
+  String get _cacheKey => '${widget.docId}:${widget.fileId}';
+
   Future<void> _load() async {
     setState(() => _isLoading = true);
     try {
-      final cached = _bytesCache.get(widget.docId);
+      final cached = _bytesCache.get(_cacheKey);
       if (cached != null) {
         final ft = _detectFileType(cached);
         _setupPdfIfNeeded(ft, cached);
@@ -685,9 +986,9 @@ class _DocumentViewerPageState extends State<DocumentViewerPage> {
         return;
       }
 
-      final bytes = await Api.I.fetchDocumentBytes(widget.docId);
+      final bytes = await Api.I.fetchFileBytes(widget.docId, widget.fileId);
       final ft = _detectFileType(bytes);
-      _bytesCache.put(widget.docId, bytes);
+      _bytesCache.put(_cacheKey, bytes);
       _setupPdfIfNeeded(ft, bytes);
       if (!mounted) return;
       setState(() { _bytes = bytes; _fileType = ft; _isLoading = false; });
@@ -699,9 +1000,9 @@ class _DocumentViewerPageState extends State<DocumentViewerPage> {
 
   Future<void> _refreshInBackground() async {
     try {
-      final fresh = await Api.I.fetchDocumentBytes(widget.docId);
+      final fresh = await Api.I.fetchFileBytes(widget.docId, widget.fileId);
       if (_bytes == null || fresh.lengthInBytes != _bytes!.lengthInBytes) {
-        _bytesCache.put(widget.docId, fresh);
+        _bytesCache.put(_cacheKey, fresh);
         final ft = _detectFileType(fresh);
         _setupPdfIfNeeded(ft, fresh);
         if (!mounted) return;

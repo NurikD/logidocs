@@ -107,10 +107,25 @@ class Api {
     );
   }
 
-  /// Документы (список)
-  Future<List<Map<String, dynamic>>> getDocuments() async {
+  /// Автомобили текущего пользователя. Пустой список — клиент с одной
+  /// машиной, папки в приложении показывать не нужно.
+  Future<List<Map<String, dynamic>>> getVehicles() async {
     await _ensureAuthHeader();
-    final res = await dio.get('/api/documents/');
+    final res = await dio.get('/api/vehicles/');
+    final list = (res.data as List)
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+    return list;
+  }
+
+  /// Документы (список). vehicleId — только документы конкретной машины;
+  /// null — все документы пользователя (как раньше, для клиента с одной машиной).
+  Future<List<Map<String, dynamic>>> getDocuments({int? vehicleId}) async {
+    await _ensureAuthHeader();
+    final res = await dio.get(
+      '/api/documents/',
+      queryParameters: vehicleId != null ? {'vehicle': vehicleId} : null,
+    );
     final list = (res.data as List)
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
@@ -123,26 +138,27 @@ class Api {
   }
 
   /// ----- Загрузка/открытие файла -----
+  /// Документ теперь может содержать несколько файлов — качаем по паре (docId, fileId).
 
-  /// Качаем байты документа (JWT обязателен)
-  Future<Uint8List> fetchDocumentBytes(int id) async {
+  /// Качаем байты конкретного файла документа (JWT обязателен)
+  Future<Uint8List> fetchFileBytes(int docId, int fileId) async {
     await _ensureAuthHeader(); // ← НЕ снимаем токен
     final res = await dio.get(
-      '/api/documents/$id/download/',
+      '/api/documents/$docId/download/$fileId/',
       options: Options(responseType: ResponseType.bytes),
     );
     return Uint8List.fromList(res.data as List<int>);
   }
 
   /// Сохранить во временный файл и открыть (mobile/desktop)
-  Future<void> downloadToFileAndOpen(int id, String filename) async {
+  Future<void> downloadFileAndOpen(int docId, int fileId, String filename) async {
     if (kIsWeb) {
-      // для web прямой openInBrowser может дать 401 (браузер не шлёт Authorization)
+      // для web прямой openFileInBrowser может дать 401 (браузер не шлёт Authorization)
       // оставляем как есть, если на сервере настроены подписанные ссылки — сработает
-      await openInBrowser(id);
+      await openFileInBrowser(docId, fileId);
       return;
     }
-    final bytes = await fetchDocumentBytes(id);
+    final bytes = await fetchFileBytes(docId, fileId);
     final dir = await getTemporaryDirectory();
     final safeName = filename.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
     final path = '${dir.path}/$safeName';
@@ -151,8 +167,8 @@ class Api {
   }
 
   /// Открыть в браузере (web). Нужна публичная/подписанная ссылка на бэке.
-  Future<void> openInBrowser(int id) async {
-    final uri = Uri.parse('$kBaseUrl/api/documents/$id/download/');
+  Future<void> openFileInBrowser(int docId, int fileId) async {
+    final uri = Uri.parse('$kBaseUrl/api/documents/$docId/download/$fileId/');
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
