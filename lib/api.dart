@@ -137,6 +137,14 @@ class Api {
     dio.options.headers.remove('Authorization');
   }
 
+  /// ----- Уведомления об истечении путёвки -----
+
+  /// Клиент нажал "Понятно" — больше не напоминать по этому документу.
+  Future<void> dismissNotification(int docId) async {
+    await _ensureAuthHeader();
+    await dio.post('/api/documents/$docId/dismiss-notification/');
+  }
+
   /// ----- Загрузка/открытие файла -----
   /// Документ теперь может содержать несколько файлов — качаем по паре (docId, fileId).
 

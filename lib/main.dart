@@ -599,7 +599,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 sliver: SliverList(
                   delegate: SliverChildBuilderDelegate((context, index) {
-                    return DocumentRow(doc: _documents[index]);
+                    return DocumentRow(doc: _documents[index], onDismissed: _load);
                   }, childCount: _documents.length),
                 ),
               ),
@@ -612,8 +612,10 @@ class _DocumentsPageState extends State<DocumentsPage> {
 }
 
 class DocumentRow extends StatelessWidget {
-  const DocumentRow({Key? key, required this.doc}) : super(key: key);
+  const DocumentRow({Key? key, required this.doc, this.onDismissed}) : super(key: key);
   final Doc doc;
+  /// Вызывается после успешного "Понятно" — чтобы список перезагрузился.
+  final VoidCallback? onDismissed;
 
   Color get _statusColor {
     if (doc.isExpired) return kStatusExpired;
@@ -629,8 +631,65 @@ class DocumentRow extends StatelessWidget {
     return 'до ${doc.expiresAt}';
   }
 
+  bool get _showExpiryBanner =>
+      doc.kind == 'business' && !doc.notificationDismissed && (doc.isExpired || doc.isExpiringSoon);
+
+  Future<void> _dismiss(BuildContext context) async {
+    try {
+      await Api.I.dismissNotification(doc.id);
+      onDismissed?.call();
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Не удалось отправить, попробуйте ещё раз')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildRow(context),
+        if (_showExpiryBanner) _buildBanner(context),
+      ],
+    );
+  }
+
+  Widget _buildBanner(BuildContext context) {
+    final color = doc.isExpired ? kStatusExpired : kStatusSoon;
+    return Container(
+      color: color.withValues(alpha: 0.08),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+      child: Row(
+        children: [
+          Icon(Icons.error_outline, size: 15, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              doc.isExpired
+                  ? 'Путёвка просрочена — нужно обновить'
+                  : 'Путёвка скоро истекает — обратитесь за новой',
+              style: TextStyle(fontSize: 11.5, color: color),
+            ),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(
+              minimumSize: Size.zero,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: () => _dismiss(context),
+            child: Text('Понятно', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: color)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRow(BuildContext context) {
     return Container(
       decoration: const BoxDecoration(
         border: Border(bottom: BorderSide(color: kLine)),
@@ -775,6 +834,7 @@ class Doc {
   // null — документ висит прямо на пользователе (клиент с одной машиной)
   final int? vehicleId;
   final String? vehiclePlate;
+  final bool notificationDismissed;
 
   Doc({
     required this.id,
@@ -788,6 +848,7 @@ class Doc {
     required this.files,
     this.vehicleId,
     this.vehiclePlate,
+    this.notificationDismissed = false,
   });
 
   static ({IconData icon, String label}) _kindMeta(String? kind) {
@@ -823,6 +884,7 @@ class Doc {
       files: files,
       vehicleId: m['vehicle_id'] as int?,
       vehiclePlate: m['vehicle_plate']?.toString(),
+      notificationDismissed: m['notification_dismissed'] == true,
     );
   }
 }
