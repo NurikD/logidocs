@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
+import 'dart:math' show sin, pi;
 import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:pdfx/pdfx.dart';
@@ -186,8 +187,14 @@ class AuthGate extends StatefulWidget {
   State<AuthGate> createState() => _AuthGateState();
 }
 
+class _GateState {
+  final bool logged;
+  final bool needPin;
+  const _GateState(this.logged, this.needPin);
+}
+
 class _AuthGateState extends State<AuthGate> {
-  Future<bool>? _future;
+  Future<_GateState>? _future;
 
   @override
   void initState() {
@@ -196,22 +203,322 @@ class _AuthGateState extends State<AuthGate> {
       await Api.I.init();
       final logged = await Api.I.hasSession();
       if (logged) _registerPushToken();
-      return logged;
+      // PIN запирает уже сохранённую сессию — спрашиваем его до документов
+      final needPin = logged && await Api.I.hasPin();
+      return _GateState(logged, needPin);
     }();
   }
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<bool>(
+    return FutureBuilder<_GateState>(
       future: _future,
       builder: (context, snap) {
-        if (!snap.hasData) {
+        final data = snap.data;
+        if (data == null) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );
         }
-        return snap.data! ? const HomePage() : const LoginPage();
+        if (!data.logged) return const LoginPage();
+        if (data.needPin) return const PinPage(mode: PinMode.unlock);
+        return const HomePage();
       },
+    );
+  }
+}
+
+// -------------------- PIN-код --------------------
+
+enum PinMode { unlock, setup }
+
+/// Экран PIN-кода. В режиме setup код вводится дважды (ввод + подтверждение),
+/// в режиме unlock — отпирает уже сохранённую сессию.
+class PinPage extends StatefulWidget {
+  const PinPage({Key? key, required this.mode, this.skippable = false}) : super(key: key);
+
+  final PinMode mode;
+
+  /// Показывать «Пропустить» — только когда PIN предлагается после входа.
+  final bool skippable;
+
+  @override
+  State<PinPage> createState() => _PinPageState();
+}
+
+class _PinPageState extends State<PinPage> with SingleTickerProviderStateMixin {
+  static const _pinLength = 4;
+
+  String _entered = '';
+  String? _firstEntry; // первый ввод в режиме setup
+  String? _error;
+  int _triesLeft = 5;
+  bool _busy = false;
+
+  late final AnimationController _shakeCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 400),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.mode == PinMode.unlock) {
+      Api.I.pinTriesLeft().then((n) {
+        if (mounted) setState(() => _triesLeft = n);
+      });
+    }
+  }
+
+  String get _title {
+    if (widget.mode == PinMode.setup) {
+      return _firstEntry == null ? 'Придумайте PIN-код' : 'Повторите PIN-код';
+    }
+    return 'Введите PIN-код';
+  }
+
+  String get _subtitle {
+    if (widget.mode == PinMode.setup) {
+      return _firstEntry == null
+          ? '4 цифры для быстрого входа'
+          : 'Ещё раз, чтобы не ошибиться';
+    }
+    return 'Для входа в LogiDocs';
+  }
+
+  void _fail(String message) {
+    setState(() {
+      _error = message;
+      _entered = '';
+    });
+    _shakeCtrl.forward(from: 0);
+  }
+
+  Future<void> _onComplete() async {
+    final pin = _entered;
+
+    if (widget.mode == PinMode.setup) {
+      if (_firstEntry == null) {
+        setState(() {
+          _firstEntry = pin;
+          _entered = '';
+          _error = null;
+        });
+        return;
+      }
+      if (_firstEntry != pin) {
+        setState(() => _firstEntry = null);
+        _fail('PIN-коды не совпали, попробуйте заново');
+        return;
+      }
+      await Api.I.setPin(pin);
+      if (!mounted) return;
+      _goHome();
+      return;
+    }
+
+    setState(() => _busy = true);
+    final ok = await Api.I.verifyPin(pin);
+    if (!mounted) return;
+    setState(() => _busy = false);
+
+    if (ok) {
+      _goHome();
+      return;
+    }
+
+    final left = await Api.I.pinTriesLeft();
+    if (!mounted) return;
+    if (left <= 0) {
+      await Api.I.logout();
+      if (!mounted) return;
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginPage()),
+        (route) => false,
+      );
+      return;
+    }
+    setState(() => _triesLeft = left);
+    _fail('Неверный PIN-код. Осталось попыток: $left');
+  }
+
+  void _goHome() {
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const HomePage()),
+      (route) => false,
+    );
+  }
+
+  void _tap(String digit) {
+    if (_busy || _entered.length >= _pinLength) return;
+    setState(() {
+      _entered += digit;
+      _error = null;
+    });
+    if (_entered.length == _pinLength) _onComplete();
+  }
+
+  void _backspace() {
+    if (_busy || _entered.isEmpty) return;
+    setState(() => _entered = _entered.substring(0, _entered.length - 1));
+  }
+
+  Future<void> _forgotPin() async {
+    await Api.I.logout();
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginPage()),
+      (route) => false,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: kPaper2,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: kLine),
+                  ),
+                  child: const Icon(Icons.lock_outline, size: 24, color: kAccent),
+                ),
+                const SizedBox(height: 20),
+                Text(_title,
+                    style: const TextStyle(
+                        fontSize: 19, fontWeight: FontWeight.w700, color: kInk)),
+                const SizedBox(height: 6),
+                Text(_subtitle,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 13, color: kInkMuted)),
+                const SizedBox(height: 28),
+                _buildDots(),
+                SizedBox(
+                  height: 42,
+                  child: Center(child: _buildHint()),
+                ),
+                _buildKeypad(),
+                const SizedBox(height: 8),
+                if (widget.mode == PinMode.unlock)
+                  TextButton(
+                    onPressed: _forgotPin,
+                    child: const Text('Забыли PIN-код?',
+                        style: TextStyle(fontSize: 13, color: kInkMuted)),
+                  ),
+                if (widget.skippable)
+                  TextButton(
+                    onPressed: _goHome,
+                    child: const Text('Пропустить',
+                        style: TextStyle(fontSize: 13, color: kInkMuted)),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Ошибка последней попытки, а если её нет — напоминание об уже
+  /// потраченных попытках (счётчик переживает перезапуск приложения).
+  Widget? _buildHint() {
+    if (_error != null) {
+      return Text(_error!,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 12.5, color: kStatusExpired));
+    }
+    if (widget.mode == PinMode.unlock && _triesLeft < 5) {
+      return Text('Осталось попыток: $_triesLeft',
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 12.5, color: kStatusSoon));
+    }
+    return null;
+  }
+
+  Widget _buildDots() {
+    return AnimatedBuilder(
+      animation: _shakeCtrl,
+      builder: (context, child) {
+        // затухающее колебание — привычная реакция на неверный код
+        final t = _shakeCtrl.value;
+        final dx = t == 0 ? 0.0 : sin(t * pi * 6) * 12 * (1 - t);
+        return Transform.translate(offset: Offset(dx, 0), child: child);
+      },
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: List.generate(_pinLength, (i) {
+          final filled = i < _entered.length;
+          return Container(
+            width: 14,
+            height: 14,
+            margin: const EdgeInsets.symmetric(horizontal: 9),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: filled ? kAccent : Colors.transparent,
+              border: Border.all(color: filled ? kAccent : kChevron, width: 1.5),
+            ),
+          );
+        }),
+      ),
+    );
+  }
+
+  Widget _buildKeypad() {
+    const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '<'];
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 280),
+      child: GridView.count(
+        crossAxisCount: 3,
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        childAspectRatio: 1.6,
+        children: keys.map((k) {
+          if (k.isEmpty) return const SizedBox.shrink();
+          if (k == '<') {
+            return _KeypadButton(
+              onTap: _backspace,
+              child: const Icon(Icons.backspace_outlined, size: 20, color: kInkMuted),
+            );
+          }
+          return _KeypadButton(
+            onTap: () => _tap(k),
+            child: Text(k,
+                style: const TextStyle(
+                    fontSize: 24, fontWeight: FontWeight.w500, color: kInk)),
+          );
+        }).toList(),
+      ),
+    );
+  }
+}
+
+class _KeypadButton extends StatelessWidget {
+  const _KeypadButton({required this.onTap, required this.child});
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Center(child: child),
+      ),
     );
   }
 }
@@ -251,8 +558,15 @@ class _LoginPageState extends State<LoginPage> {
         _toast('Пожалуйста, смените пароль');
       } else {
         _registerPushToken();
+        // PIN предлагаем только если его ещё нет; отказаться можно
+        final hasPin = await Api.I.hasPin();
+        if (!mounted) return;
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomePage()),
+          MaterialPageRoute(
+            builder: (_) => hasPin
+                ? const HomePage()
+                : const PinPage(mode: PinMode.setup, skippable: true),
+          ),
         );
       }
     } on DioException catch (e) {
