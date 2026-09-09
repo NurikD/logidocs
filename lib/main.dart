@@ -3,7 +3,6 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:pdfx/pdfx.dart';
 import 'package:photo_view/photo_view.dart';
-import 'package:intl/intl.dart';
 import 'api.dart';
 
 // -------------------- design tokens --------------------
@@ -806,20 +805,6 @@ class Doc {
     final kind = m['kind']?.toString();
     final meta = _kindMeta(kind);
 
-    bool isExpired = false;
-    bool isExpiringSoon = false;
-    if (m['expires_at'] != null) {
-      try {
-        final expireDate = DateFormat('yyyy-MM-dd').parse(m['expires_at']);
-        final now = DateTime.now();
-        isExpired = expireDate.isBefore(now);
-        if (!isExpired) {
-          final daysUntilExpiration = expireDate.difference(now).inDays;
-          isExpiringSoon = daysUntilExpiration <= 30;
-        }
-      } catch (_) {}
-    }
-
     final files = (m['files'] as List? ?? [])
         .map((e) => DocFile.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList();
@@ -831,8 +816,10 @@ class Doc {
       kindLabel: meta.label,
       expiresAt: m['expires_at']?.toString(),
       icon: meta.icon,
-      isExpired: isExpired,
-      isExpiringSoon: isExpiringSoon,
+      // Считает бэкенд (accounts.models.Document.is_expired/is_expiring_soon) —
+      // единый порог (7 дней) для приложения, adminui и push-уведомлений.
+      isExpired: m['is_expired'] == true,
+      isExpiringSoon: m['is_expiring_soon'] == true,
       files: files,
       vehicleId: m['vehicle_id'] as int?,
       vehiclePlate: m['vehicle_plate']?.toString(),
