@@ -50,6 +50,7 @@ void main() async {
   // Веб пока без Firebase-конфига — инициализируем только на Android/iOS.
   if (!kIsWeb) {
     await Firebase.initializeApp();
+    _listenForegroundPush();
   }
   await Api.I.init();
   runApp(const LogiDocsApp());
@@ -73,6 +74,35 @@ Future<void> _registerPushToken() async {
   } catch (_) {}
 }
 
+/// Пока приложение открыто, Android не кладёт push в шторку — показываем
+/// его сами, иначе уведомление просто теряется.
+void _listenForegroundPush() {
+  if (kIsWeb) return;
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    final n = message.notification;
+    if (n == null) return;
+    scaffoldMessengerKey.currentState?.showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 6),
+        backgroundColor: kAccent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if ((n.title ?? '').isNotEmpty)
+              Text(n.title!, style: const TextStyle(fontWeight: FontWeight.w600)),
+            if ((n.body ?? '').isNotEmpty) Text(n.body!),
+          ],
+        ),
+      ),
+    );
+  });
+}
+
+final scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+
 class LogiDocsApp extends StatelessWidget {
   const LogiDocsApp({Key? key}) : super(key: key);
 
@@ -80,6 +110,7 @@ class LogiDocsApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'LogiDocs',
+      scaffoldMessengerKey: scaffoldMessengerKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
