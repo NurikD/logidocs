@@ -614,6 +614,85 @@ class _KeypadButton extends StatelessWidget {
   }
 }
 
+/// Меню сессии в шапке. «Заблокировать» — повседневное действие: сессия
+/// остаётся, при возврате спрашивается PIN. «Выйти из аккаунта» — полный
+/// сброс, после него нужен логин с паролем и PIN придётся задавать заново.
+class SessionMenuButton extends StatelessWidget {
+  const SessionMenuButton({Key? key}) : super(key: key);
+
+  void _lock(BuildContext context) {
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const PinPage(mode: PinMode.unlock)),
+      (route) => false,
+    );
+  }
+
+  Future<void> _logout(BuildContext context) async {
+    await Api.I.logout();
+    if (!context.mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginPage()),
+      (route) => false,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<bool>(
+      future: Api.I.hasPin(),
+      builder: (context, snap) {
+        final hasPin = snap.data ?? false;
+
+        // без PIN запирать нечем — оставляем прежний простой выход
+        if (!hasPin) {
+          return IconButton(
+            tooltip: 'Выход',
+            onPressed: () => _logout(context),
+            icon: const Icon(Icons.logout, color: kInkMuted),
+          );
+        }
+
+        return PopupMenuButton<String>(
+          tooltip: 'Меню',
+          icon: const Icon(Icons.more_vert, color: kInkMuted),
+          position: PopupMenuPosition.under,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(6),
+            side: const BorderSide(color: kLine),
+          ),
+          color: Colors.white,
+          onSelected: (v) => v == 'lock' ? _lock(context) : _logout(context),
+          itemBuilder: (_) => const [
+            PopupMenuItem(
+              value: 'lock',
+              child: Row(
+                children: [
+                  Icon(Icons.lock_outline, size: 19, color: kInk),
+                  SizedBox(width: 12),
+                  Text('Заблокировать', style: TextStyle(fontSize: 14, color: kInk)),
+                ],
+              ),
+            ),
+            PopupMenuItem(
+              value: 'logout',
+              child: Row(
+                children: [
+                  Icon(Icons.logout, size: 19, color: kStatusExpired),
+                  SizedBox(width: 12),
+                  Text('Выйти из аккаунта',
+                      style: TextStyle(fontSize: 14, color: kStatusExpired)),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
 class LoginPage extends StatefulWidget {
   const LoginPage({Key? key}) : super(key: key);
 
@@ -880,19 +959,7 @@ class _DispatcherHomePageState extends State<DispatcherHomePage> {
             tooltip: 'Обновить', onPressed: _load,
             icon: const Icon(Icons.refresh, color: kInkMuted),
           ),
-          IconButton(
-            tooltip: 'Выход',
-            onPressed: () async {
-              await Api.I.logout();
-              if (!context.mounted) return;
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (_) => const LoginPage()),
-                (route) => false,
-              );
-            },
-            icon: const Icon(Icons.logout, color: kInkMuted),
-          ),
+          const SessionMenuButton(),
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
@@ -1042,19 +1109,7 @@ class _VehiclesPageState extends State<VehiclesPage> {
             tooltip: 'Обновить', onPressed: _refresh,
             icon: const Icon(Icons.refresh, color: kInkMuted),
           ),
-          IconButton(
-            tooltip: 'Выход',
-            onPressed: () async {
-              await Api.I.logout();
-              if (!context.mounted) return;
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (_) => const LoginPage()),
-                (route) => false,
-              );
-            },
-            icon: const Icon(Icons.logout, color: kInkMuted),
-          ),
+          const SessionMenuButton(),
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
@@ -1204,19 +1259,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
             tooltip: 'Обновить', onPressed: _refresh,
             icon: const Icon(Icons.refresh, color: kInkMuted),
           ),
-          IconButton(
-            tooltip: 'Выход',
-            onPressed: () async {
-              await Api.I.logout();
-              if (!mounted) return;
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (_) => const LoginPage()),
-                (route) => false,
-              );
-            },
-            icon: const Icon(Icons.logout, color: kInkMuted),
-          ),
+          const SessionMenuButton(),
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
