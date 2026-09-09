@@ -177,10 +177,22 @@ class Api {
 
   Future<int> pinTriesLeft() async => _maxPinFails - await pinFails();
 
+  /// ----- Биометрия -----
+  /// Отпечаток/Face ID — альтернатива вводу PIN, отпирает ту же сессию.
+  /// Включаем только явно, вместе с PIN: PIN остаётся запасным способом,
+  /// если палец не читается или биометрию сбросили в настройках телефона.
+
+  Future<bool> biometryEnabled() async =>
+      (await _storage.read(key: 'biometry')) == '1';
+
+  Future<void> setBiometryEnabled(bool on) async =>
+      _storage.write(key: 'biometry', value: on ? '1' : '0');
+
   Future<void> clearPin() async {
     await _storage.delete(key: 'pin_hash');
     await _storage.delete(key: 'pin_salt');
     await _storage.delete(key: 'pin_fails');
+    await _storage.delete(key: 'biometry');
   }
 
   Future<void> logout() async {

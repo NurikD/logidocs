@@ -7,6 +7,7 @@ import 'package:pdfx/pdfx.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:local_auth/local_auth.dart';
 import 'api.dart';
 
 // -------------------- design tokens --------------------
@@ -260,6 +261,9 @@ class _PinPageState extends State<PinPage> with SingleTickerProviderStateMixin {
     duration: const Duration(milliseconds: 400),
   );
 
+  final _localAuth = LocalAuthentication();
+  bool _biometryAvailable = false;
+
   @override
   void initState() {
     super.initState();
@@ -267,7 +271,48 @@ class _PinPageState extends State<PinPage> with SingleTickerProviderStateMixin {
       Api.I.pinTriesLeft().then((n) {
         if (mounted) setState(() => _triesLeft = n);
       });
+      _initBiometry();
     }
+  }
+
+  /// Биометрия доступна, только если она включена в приложении, поддержана
+  /// телефоном и там реально зарегистрирован хотя бы один отпечаток/лицо.
+  Future<void> _initBiometry() async {
+    try {
+      if (!await Api.I.biometryEnabled()) return;
+      final supported = await _localAuth.isDeviceSupported();
+      final canCheck = await _localAuth.canCheckBiometrics;
+      final enrolled = (await _localAuth.getAvailableBiometrics()).isNotEmpty;
+      if (!mounted || !(supported && canCheck && enrolled)) return;
+      setState(() => _biometryAvailable = true);
+      _authBiometric(); // сразу предлагаем — как в банковских приложениях
+    } catch (_) {}
+  }
+
+  Future<void> _authBiometric() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final ok = await _localAuth.authenticate(
+        localizedReason: 'Вход в LogiDocs',
+        options: const AuthenticationOptions(
+          biometricOnly: true,
+          stickyAuth: true,
+        ),
+      );
+      if (!mounted) return;
+      setState(() => _busy = false);
+      if (ok) _goHome();
+    } catch (_) {
+      // отказ или сбой — молча остаёмся на вводе PIN
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _shakeCtrl.dispose();
+    super.dispose();
   }
 
   String get _title {
@@ -313,6 +358,8 @@ class _PinPageState extends State<PinPage> with SingleTickerProviderStateMixin {
       }
       await Api.I.setPin(pin);
       if (!mounted) return;
+      await _offerBiometry();
+      if (!mounted) return;
       _goHome();
       return;
     }
@@ -341,6 +388,43 @@ class _PinPageState extends State<PinPage> with SingleTickerProviderStateMixin {
     }
     setState(() => _triesLeft = left);
     _fail('Неверный PIN-код. Осталось попыток: $left');
+  }
+
+  /// После установки PIN предлагаем включить отпечаток/Face ID —
+  /// но только если телефон это умеет и биометрия в нём настроена.
+  Future<void> _offerBiometry() async {
+    try {
+      final supported = await _localAuth.isDeviceSupported();
+      final canCheck = await _localAuth.canCheckBiometrics;
+      final enrolled = (await _localAuth.getAvailableBiometrics()).isNotEmpty;
+      if (!mounted || !(supported && canCheck && enrolled)) return;
+
+      final agreed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+          title: const Text('Вход по биометрии',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: kInk)),
+          content: const Text(
+            'Использовать отпечаток или Face ID вместо ввода PIN-кода? '
+            'PIN останется запасным способом входа.',
+            style: TextStyle(fontSize: 14, color: kInkMuted),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Не сейчас', style: TextStyle(color: kInkMuted)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Включить',
+                  style: TextStyle(color: kAccent, fontWeight: FontWeight.w600)),
+            ),
+          ],
+        ),
+      );
+      if (agreed == true) await Api.I.setBiometryEnabled(true);
+    } catch (_) {}
   }
 
   void _goHome() {
@@ -412,6 +496,13 @@ class _PinPageState extends State<PinPage> with SingleTickerProviderStateMixin {
                 ),
                 _buildKeypad(),
                 const SizedBox(height: 8),
+                if (_biometryAvailable)
+                  TextButton.icon(
+                    onPressed: _authBiometric,
+                    icon: const Icon(Icons.fingerprint, size: 20, color: kAccent),
+                    label: const Text('Войти по биометрии',
+                        style: TextStyle(fontSize: 13, color: kAccent)),
+                  ),
                 if (widget.mode == PinMode.unlock)
                   TextButton(
                     onPressed: _forgotPin,

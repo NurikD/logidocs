@@ -1,5 +1,7 @@
 package com.example.logidocs
 
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 
-class MainActivity : FlutterActivity()
+// FlutterFragmentActivity, а не FlutterActivity: local_auth показывает
+// системный BiometricPrompt, которому нужен FragmentActivity.
+class MainActivity : FlutterFragmentActivity()
