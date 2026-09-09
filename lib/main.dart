@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:pdfx/pdfx.dart';
 import 'package:photo_view/photo_view.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'api.dart';
 
 // -------------------- design tokens --------------------
@@ -44,8 +47,30 @@ final _bytesCache = _LruCache<String, Uint8List>(capacity: 32);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Веб пока без Firebase-конфига — инициализируем только на Android/iOS.
+  if (!kIsWeb) {
+    await Firebase.initializeApp();
+  }
   await Api.I.init();
   runApp(const LogiDocsApp());
+}
+
+/// Просит разрешение на пуши, получает FCM-токен и регистрирует его за
+/// текущим пользователем. Не критично для входа — ошибки молча проглатываем.
+Future<void> _registerPushToken() async {
+  if (kIsWeb) return;
+  try {
+    final messaging = FirebaseMessaging.instance;
+    await messaging.requestPermission();
+    final platform = defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+    final token = await messaging.getToken();
+    if (token != null) {
+      await Api.I.registerDeviceToken(token, platform);
+    }
+    messaging.onTokenRefresh.listen((t) {
+      Api.I.registerDeviceToken(t, platform).catchError((_) {});
+    });
+  } catch (_) {}
 }
 
 class LogiDocsApp extends StatelessWidget {
@@ -138,7 +163,9 @@ class _AuthGateState extends State<AuthGate> {
     super.initState();
     _future = () async {
       await Api.I.init();
-      return Api.I.hasSession();
+      final logged = await Api.I.hasSession();
+      if (logged) _registerPushToken();
+      return logged;
     }();
   }
 
@@ -192,6 +219,7 @@ class _LoginPageState extends State<LoginPage> {
       if (data['must_change_pw'] == true) {
         _toast('Пожалуйста, смените пароль');
       } else {
+        _registerPushToken();
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const HomePage()),
         );
