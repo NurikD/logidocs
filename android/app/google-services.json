@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "19999698729",
+    "project_id": "logidocs-1099f",
+    "storage_bucket": "logidocs-1099f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:19999698729:android:56a78332d0d6bf62291138",
+        "android_client_info": {
+          "package_name": "com.example.logidocs"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD_lqu0kxisQlqsknBrxQyApaUEwpFt9ZE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
