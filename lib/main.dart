@@ -575,9 +575,48 @@ class ExpiringClientRow extends StatelessWidget {
   }
 }
 
-class VehiclesPage extends StatelessWidget {
+class VehiclesPage extends StatefulWidget {
   const VehiclesPage({Key? key, required this.vehicles}) : super(key: key);
   final List<Vehicle> vehicles;
+
+  @override
+  State<VehiclesPage> createState() => _VehiclesPageState();
+}
+
+class _VehiclesPageState extends State<VehiclesPage> {
+  late List<Vehicle> _vehicles = widget.vehicles;
+
+  Future<void> _load() async {
+    try {
+      final raw = await Api.I.getVehicles();
+      final list = raw.map((m) => Vehicle.fromJson(m)).toList();
+      if (!mounted) return;
+      setState(() => _vehicles = list);
+    } catch (e) {
+      if (!mounted) return;
+      _toast('Ошибка обновления: $e', isError: true);
+    }
+  }
+
+  Future<void> _refresh() async {
+    // документы машин могли измениться — сбрасываем кэш, иначе внутри папки
+    // покажется старый список
+    _docsCache.clear();
+    await _load();
+    if (!mounted) return;
+    _toast('Данные обновлены');
+  }
+
+  void _toast(String msg, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: isError ? kStatusExpired : kStatusValid,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -594,6 +633,10 @@ class VehiclesPage extends StatelessWidget {
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: 'Обновить', onPressed: _refresh,
+            icon: const Icon(Icons.refresh, color: kInkMuted),
+          ),
           IconButton(
             tooltip: 'Выход',
             onPressed: () async {
@@ -613,13 +656,16 @@ class VehiclesPage extends StatelessWidget {
           child: Container(height: 1, color: kLine),
         ),
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-        children: [
-          const Text('Мои автомобили', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: kInk)),
-          const SizedBox(height: 12),
-          for (final v in vehicles) VehicleRow(vehicle: v),
-        ],
+      body: RefreshIndicator(
+        onRefresh: _refresh,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+          children: [
+            const Text('Мои автомобили', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: kInk)),
+            const SizedBox(height: 12),
+            for (final v in _vehicles) VehicleRow(vehicle: v),
+          ],
+        ),
       ),
     );
   }
