@@ -1,8 +1,11 @@
 // lib/api.dart
+import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 import 'dart:io' show File;
 import 'package:flutter/foundation.dart' show kIsWeb;
 
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
@@ -137,6 +140,47 @@ class Api {
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
     return list;
+  }
+
+  /// ----- PIN-код -----
+  /// PIN не заменяет пароль: он локально запирает уже сохранённую сессию.
+  /// Поэтому храним не сам код, а соль и хэш от него.
+
+  static const _maxPinFails = 5;
+
+  Future<bool> hasPin() async => (await _storage.read(key: 'pin_hash')) != null;
+
+  String _hashPin(String pin, String salt) =>
+      sha256.convert(utf8.encode('$salt:$pin')).toString();
+
+  Future<void> setPin(String pin) async {
+    final rnd = Random.secure();
+    final salt = base64Url.encode(List<int>.generate(16, (_) => rnd.nextInt(256)));
+    await _storage.write(key: 'pin_salt', value: salt);
+    await _storage.write(key: 'pin_hash', value: _hashPin(pin, salt));
+    await _storage.write(key: 'pin_fails', value: '0');
+  }
+
+  Future<bool> verifyPin(String pin) async {
+    final salt = await _storage.read(key: 'pin_salt');
+    final hash = await _storage.read(key: 'pin_hash');
+    if (salt == null || hash == null) return false;
+    final ok = _hashPin(pin, salt) == hash;
+    await _storage.write(key: 'pin_fails', value: ok ? '0' : '${await pinFails() + 1}');
+    return ok;
+  }
+
+  /// Счётчик неудач переживает перезапуск — иначе PIN подбирался бы
+  /// бесконечно простым перезапуском приложения.
+  Future<int> pinFails() async =>
+      int.tryParse(await _storage.read(key: 'pin_fails') ?? '0') ?? 0;
+
+  Future<int> pinTriesLeft() async => _maxPinFails - await pinFails();
+
+  Future<void> clearPin() async {
+    await _storage.delete(key: 'pin_hash');
+    await _storage.delete(key: 'pin_salt');
+    await _storage.delete(key: 'pin_fails');
   }
 
   Future<void> logout() async {
