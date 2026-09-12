@@ -8,6 +8,8 @@ import 'package:photo_view/photo_view.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:local_auth/local_auth.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'api.dart';
 
 // -------------------- design tokens --------------------
@@ -862,6 +864,67 @@ class _LoginPageState extends State<LoginPage> {
 /// Решает, что показать сразу после входа: если у клиента одна машина
 /// (или ни одной, для документов "как раньше") — список документов;
 /// если несколько — список папок-автомобилей.
+const _kGithubRepo = 'NurikD/logidocs';
+
+/// Сравнивает версии по частям (1.10.0 > 1.9.0, а не наоборот, как было бы
+/// при обычном сравнении строк).
+bool _isNewerVersion(String latest, String current) {
+  List<int> parts(String v) => v.split('.').map((p) => int.tryParse(p) ?? 0).toList();
+  final a = parts(latest), b = parts(current);
+  for (var i = 0; i < 3; i++) {
+    final x = i < a.length ? a[i] : 0;
+    final y = i < b.length ? b[i] : 0;
+    if (x != y) return x > y;
+  }
+  return false;
+}
+
+/// Приложение распространяется вне Google Play — обновления только через
+/// GitHub Releases. Раз в открытие сверяем версию с последним релизом и,
+/// если есть новее, предлагаем скачать. Сеть/GitHub недоступны — молча
+/// пропускаем, это не должно мешать работе.
+Future<void> _checkForUpdate(BuildContext context) async {
+  if (kIsWeb) return;
+  try {
+    final info = await PackageInfo.fromPlatform();
+    final res = await Dio().get(
+      'https://api.github.com/repos/$_kGithubRepo/releases/latest',
+      options: Options(headers: {'Accept': 'application/vnd.github+json'}),
+    );
+    final tag = (res.data['tag_name'] as String?) ?? '';
+    final latest = tag.startsWith('v') ? tag.substring(1) : tag;
+    final url = res.data['html_url'] as String?;
+
+    if (url != null && _isNewerVersion(latest, info.version) && context.mounted) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+          title: const Text('Доступно обновление',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: kInk)),
+          content: Text(
+            'Вышла версия $latest (у вас ${info.version}).',
+            style: const TextStyle(fontSize: 14, color: kInkMuted),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Позже', style: TextStyle(color: kInkMuted)),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+              },
+              child: const Text('Скачать', style: TextStyle(color: kAccent, fontWeight: FontWeight.w600)),
+            ),
+          ],
+        ),
+      );
+    }
+  } catch (_) {}
+}
+
 class HomePage extends StatefulWidget {
   const HomePage({Key? key}) : super(key: key);
 
@@ -883,6 +946,9 @@ class _HomePageState extends State<HomePage> {
       final vehicles = raw.map((m) => Vehicle.fromJson(m)).toList();
       return _HomeData.client(vehicles);
     }();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _checkForUpdate(context);
+    });
   }
 
   @override
