@@ -24,7 +24,6 @@ dependencies:
   crypto: ^3.0.6
   local_auth: ^2.3.0
 dev_dependencies:
-  flutter_native_splash: ^2.4.6
   flutter_launcher_icons: ^0.14.4
   flutter_test:
     sdk: flutter
@@ -41,10 +40,4 @@ flutter_icons:
   android: true
   ios: true
   image_path: "assets/icon.png"
-
-flutter_native_splash:
-  color: "#0066CC"       # фон экрана (как в авторизации)
-  image: assets/icon.png # твоя иконка здания
-  android: true
-  ios: true
 
