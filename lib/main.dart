@@ -111,7 +111,7 @@ class LogiDocsApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'LogiDocs',
+      title: 'KumAryk',
       scaffoldMessengerKey: scaffoldMessengerKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -294,7 +294,7 @@ class _PinPageState extends State<PinPage> with SingleTickerProviderStateMixin {
     setState(() => _busy = true);
     try {
       final ok = await _localAuth.authenticate(
-        localizedReason: 'Вход в LogiDocs',
+        localizedReason: 'Вход в KumAryk',
         options: const AuthenticationOptions(
           biometricOnly: true,
           stickyAuth: true,
@@ -328,7 +328,7 @@ class _PinPageState extends State<PinPage> with SingleTickerProviderStateMixin {
           ? '4 цифры для быстрого входа'
           : 'Ещё раз, чтобы не ошибиться';
     }
-    return 'Для входа в LogiDocs';
+    return 'Для входа в KumAryk';
   }
 
   void _fail(String message) {
@@ -789,7 +789,7 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                         const SizedBox(height: 14),
                         const Text(
-                          'LogiDocs',
+                          'KumAryk',
                           style: TextStyle(
                             fontSize: 26, fontWeight: FontWeight.w700,
                             color: kInk, letterSpacing: -0.2,
@@ -951,7 +951,7 @@ class _DispatcherHomePageState extends State<DispatcherHomePage> {
           children: const [
             Icon(Icons.description_outlined, size: 18, color: kAccent),
             SizedBox(width: 10),
-            Text('LogiDocs'),
+            Text('KumAryk'),
           ],
         ),
         actions: [
@@ -1101,7 +1101,7 @@ class _VehiclesPageState extends State<VehiclesPage> {
           children: const [
             Icon(Icons.description_outlined, size: 18, color: kAccent),
             SizedBox(width: 10),
-            Text('LogiDocs'),
+            Text('KumAryk'),
           ],
         ),
         actions: [
@@ -1251,7 +1251,7 @@ class _DocumentsPageState extends State<DocumentsPage> {
           children: const [
             Icon(Icons.description_outlined, size: 18, color: kAccent),
             SizedBox(width: 10),
-            Text('LogiDocs'),
+            Text('KumAryk'),
           ],
         ),
         actions: [
